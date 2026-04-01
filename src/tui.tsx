@@ -1,5 +1,6 @@
 import type { TuiPlugin, TuiPluginModule, TuiSlotPlugin } from "@opencode-ai/plugin/tui"
 import { spawn } from "node:child_process"
+import path from "node:path"
 import { isPreviewable as serverIsPreviewable } from "./server"
 
 const DEFAULT_PORT = Number(process.env.PREVIEW_PORT ?? "17890")
@@ -19,29 +20,48 @@ function isPreviewable(file: string): boolean {
   return serverIsPreviewable(file)
 }
 
-function previewUrl(baseUrl: string, file: string): string {
-  return `${baseUrl}/preview?file=${encodeURIComponent(file)}`
+function getWorktreeName(worktreePath: string, directory: string): string | undefined {
+  if (!worktreePath || worktreePath === directory) return undefined
+  return path.basename(worktreePath)
+}
+
+function buildUrl(baseUrl: string, pathname: string, params: Record<string, string | undefined>): string {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v) qs.set(k, v)
+  }
+  const query = qs.toString()
+  return query ? `${baseUrl}${pathname}?${query}` : `${baseUrl}${pathname}`
+}
+
+function previewUrl(baseUrl: string, file: string, worktree?: string): string {
+  return buildUrl(baseUrl, "/preview", { file, worktree })
+}
+
+function browserUrl(baseUrl: string, worktree?: string): string {
+  return buildUrl(baseUrl, "/", { worktree })
 }
 
 export const tui: TuiPlugin = async (api) => {
   const baseUrl = `http://localhost:${DEFAULT_PORT}`
+  const worktree = getWorktreeName(api.state.path.worktree, api.state.path.directory)
 
   api.command.register(() => {
     const route = api.route.current
-    if (route.name !== "session") return [openBrowserCommand(baseUrl, api)]
+    if (route.name !== "session") return [openBrowserCommand(baseUrl, api, worktree)]
 
     const files = api.state.session.diff(route.params.sessionID)
     const previewable = files.filter((f) => isPreviewable(f.file))
 
     return [
-      openBrowserCommand(baseUrl, api),
+      openBrowserCommand(baseUrl, api, worktree),
       ...previewable.map((f) => ({
         title: `Preview: ${f.file}`,
         value: `preview:file:${f.file}`,
         description: `Open ${f.file} in browser preview`,
         category: "Preview",
         onSelect() {
-          const url = previewUrl(baseUrl, f.file)
+          const url = previewUrl(baseUrl, f.file, worktree)
           openUrl(url)
           api.ui.toast({ variant: "info", message: `Preview: ${f.file}`, duration: 2000 })
         },
@@ -55,16 +75,20 @@ export const tui: TuiPlugin = async (api) => {
         const files = api.state.session.diff(props.session_id)
         const previewable = files.filter((f) => isPreviewable(f.file))
 
-        if (previewable.length === 0) return null
-
         return (
           <box flexDirection="column" paddingTop={1}>
             <text bold dimColor>
               Preview
             </text>
+            <box flexDirection="row" gap={1}>
+              <text dimColor>{worktree ? "🌿" : "📂"}</text>
+              <a href={browserUrl(baseUrl, worktree)} color="cyan">
+                {worktree ?? "Browse Files"}
+              </a>
+            </box>
             {previewable.map((f) => {
               const icon = f.file.endsWith(".drawio") ? "📊" : "📄"
-              const url = previewUrl(baseUrl, f.file)
+              const url = previewUrl(baseUrl, f.file, worktree)
               return (
                 <box flexDirection="row" gap={1}>
                   <text dimColor>{icon}</text>
@@ -86,15 +110,18 @@ export const tui: TuiPlugin = async (api) => {
 function openBrowserCommand(
   baseUrl: string,
   api: Parameters<TuiPlugin>[0],
+  worktree?: string,
 ) {
+  const url = browserUrl(baseUrl, worktree)
+  const label = worktree ? `Open Preview (${worktree})` : "Open Preview"
   return {
-    title: "Open Preview",
+    title: label,
     value: "preview:open",
     description: "Open the preview file browser in your default browser",
     category: "Preview",
     onSelect() {
-      openUrl(baseUrl)
-      api.ui.toast({ variant: "info", message: `Opened ${baseUrl}`, duration: 3000 })
+      openUrl(url)
+      api.ui.toast({ variant: "info", message: `Opened ${url}`, duration: 3000 })
     },
   }
 }
