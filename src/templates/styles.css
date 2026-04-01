@@ -1,0 +1,394 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f5f7fb;
+  --card: #ffffff;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --border: #e5e7eb;
+  --code-bg: #f3f4f6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1117;
+    --card: #161a22;
+    --text: #e5e7eb;
+    --muted: #9ca3af;
+    --primary: #818cf8;
+    --primary-hover: #a5b4fc;
+    --border: #2b3340;
+    --code-bg: #111827;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+a {
+  color: var(--primary);
+}
+
+a:hover {
+  color: var(--primary-hover);
+}
+
+.browser-shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem 1rem 3rem;
+}
+
+.browser-header h1 {
+  margin: 0;
+  font-size: 1.8rem;
+}
+
+.project-path {
+  margin-top: 0.5rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.project-path code {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.2rem 0.5rem;
+}
+
+.file-list-panel {
+  margin-top: 1.5rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1rem;
+}
+
+.panel-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.panel-title-row h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+button {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--primary);
+}
+
+.file-list {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+}
+
+.file-tree {
+  list-style: none;
+  margin: 0;
+  padding-left: 1rem;
+}
+
+.folder-item > details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0.2rem 0;
+}
+
+.file-item + .file-item {
+  margin-top: 0.4rem;
+}
+
+.file-item a {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  text-decoration: none;
+  padding: 0.6rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+
+.file-item a:hover {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+.file-path {
+  word-break: break-all;
+}
+
+.file-empty {
+  color: var(--muted);
+  padding: 0.75rem;
+}
+
+.preview-layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.preview-sidebar {
+  width: 280px;
+  min-width: 220px;
+  max-width: 360px;
+  height: 100vh;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--card);
+  padding: 0.75rem 0;
+  flex-shrink: 0;
+}
+
+.preview-sidebar .sidebar-header {
+  padding: 0.5rem 1rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.5rem;
+}
+
+.preview-sidebar .sidebar-header h2 {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.preview-sidebar .file-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0 0.5rem;
+}
+
+.preview-sidebar .file-tree .file-tree {
+  padding-left: 0.75rem;
+}
+
+.preview-sidebar .folder-item > details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0.2rem 0.5rem;
+  font-size: 0.88rem;
+}
+
+.preview-sidebar .file-item a {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-decoration: none;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.88rem;
+  color: var(--text);
+  border: 1px solid transparent;
+}
+
+.preview-sidebar .file-item a:hover {
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  border-color: var(--border);
+}
+
+.preview-sidebar .file-item a.active {
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.preview-sidebar .file-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-sidebar .sidebar-loading {
+  padding: 1rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.preview-content {
+  flex: 1;
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.markdown-body {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 2rem 1rem 3rem;
+  line-height: 1.7;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  line-height: 1.25;
+  margin-top: 1.5em;
+  margin-bottom: 0.6em;
+}
+
+.markdown-body pre {
+  overflow-x: auto;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+.markdown-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+}
+
+.markdown-body :not(pre) > code {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.15rem 0.35rem;
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--border);
+  padding: 0.55rem 0.65rem;
+  text-align: left;
+}
+
+.drawio-page {
+  margin: 0;
+}
+
+.drawio-container {
+  width: 100%;
+  min-height: calc(100vh - 3rem);
+  margin: 0;
+  padding: 1rem;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  background: var(--bg);
+}
+
+#drawio-viewer {
+  width: 100%;
+  min-height: calc(100vh - 5rem);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  #drawio-viewer {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.15);
+  }
+}
+
+/* draw.io viewer toolbar styling */
+.drawio-container .mxgraph .geDiagramContainer {
+  background: var(--card) !important;
+}
+
+.drawio-container .geToolbarContainer {
+  background: var(--card) !important;
+  border-bottom: 1px solid var(--border) !important;
+  border-radius: 12px 12px 0 0 !important;
+  padding: 4px 8px !important;
+}
+
+.drawio-container .geToolbarContainer .geButton {
+  border-radius: 6px !important;
+  opacity: 0.7;
+  transition: opacity 0.15s ease;
+}
+
+.drawio-container .geToolbarContainer .geButton:hover {
+  opacity: 1;
+}
+
+@media (prefers-color-scheme: dark) {
+  .drawio-container .geToolbarContainer {
+    filter: invert(1) hue-rotate(180deg);
+  }
+
+  .drawio-container .geDiagramContainer svg {
+    filter: invert(1) hue-rotate(180deg);
+  }
+}
+
+.code-body {
+  padding: 1rem 1.5rem 3rem;
+}
+
+.code-meta {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0 0.75rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.code-lang {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+}
+
+.code-body pre {
+  margin: 0;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.code-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  tab-size: 4;
+}
+
+@media (max-width: 640px) {
+  .panel-title-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

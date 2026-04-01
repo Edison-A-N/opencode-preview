@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Preview Browser</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="browser-shell">
+      <header class="browser-header">
+        <h1>Preview Browser</h1>
+        <p class="project-path">Project: <code>{{PROJECT_DIRECTORY}}</code></p>
+      </header>
+
+      <section class="file-list-panel">
+        <div class="panel-title-row">
+          <h2>Markdown & DrawIO Files</h2>
+          <button id="refresh" type="button">Refresh</button>
+        </div>
+        <ul id="file-list" class="file-list"></ul>
+      </section>
+    </main>
+
+    <script>
+      const fileList = document.getElementById("file-list");
+      const refreshButton = document.getElementById("refresh");
+      const dirParams = "{{DIR_PARAMS}}";
+
+      const escapeHtml = (value) => value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&#39;");
+
+      const iconFor = (file) => {
+        if (file.endsWith(".drawio")) return "📊";
+        if (file.endsWith(".md")) return "📄";
+        return "💻";
+      };
+
+      function buildHref(file) {
+        let href = "/preview?file=" + encodeURIComponent(file);
+        if (dirParams) href += "&" + dirParams;
+        return href;
+      }
+
+      function buildTree(files) {
+        const root = {};
+        for (const file of files) {
+          const parts = file.split("/");
+          let cursor = root;
+          for (let i = 0; i < parts.length; i += 1) {
+            const part = parts[i];
+            const isLeaf = i === parts.length - 1;
+            if (isLeaf) {
+              cursor[part] = file;
+            } else {
+              cursor[part] = cursor[part] || {};
+              cursor = cursor[part];
+            }
+          }
+        }
+        return root;
+      }
+
+      function renderTree(node) {
+        const entries = Object.entries(node).sort(([a], [b]) => a.localeCompare(b));
+        return `<ul class=\"file-tree\">${entries.map(([name, value]) => {
+          if (typeof value === "string") {
+            const href = buildHref(value);
+            return `<li class=\"file-item\"><a href=\"${href}\"><span class=\"file-icon\">${iconFor(value)}</span><span class=\"file-path\">${escapeHtml(name)}</span></a></li>`;
+          }
+          return `<li class=\"folder-item\"><details open><summary>📁 ${escapeHtml(name)}</summary>${renderTree(value)}</details></li>`;
+        }).join("")}</ul>`;
+      }
+
+      async function loadFiles() {
+        fileList.innerHTML = "<li class=\"file-empty\">Loading...</li>";
+        let apiUrl = "/api/files";
+        if (dirParams) apiUrl += "?" + dirParams;
+        const response = await fetch(apiUrl);
+        if (!response.ok) {
+          fileList.innerHTML = "<li class=\"file-empty\">Failed to load files.</li>";
+          return;
+        }
+
+        const data = await response.json();
+        const files = Array.isArray(data.files) ? data.files : [];
+
+        if (files.length === 0) {
+          fileList.innerHTML = "<li class=\"file-empty\">No .md or .drawio files found.</li>";
+          return;
+        }
+
+        fileList.innerHTML = renderTree(buildTree(files));
+      }
+
+      refreshButton.addEventListener("click", () => {
+        loadFiles().catch(() => {
+          fileList.innerHTML = "<li class=\"file-empty\">Failed to load files.</li>";
+        });
+      });
+
+      loadFiles().catch(() => {
+        fileList.innerHTML = "<li class=\"file-empty\">Failed to load files.</li>";
+      });
+    </script>
+  </body>
+</html>
