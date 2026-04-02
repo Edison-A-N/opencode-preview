@@ -1,13 +1,18 @@
 # opencode-preview
 
-OpenCode plugin that auto-starts a file preview server for Markdown and DrawIO files.
+OpenCode plugin that auto-starts a file preview server for Markdown, DrawIO, HTML, CSV, and source code files.
 
 ## Features
 
 - **Multi-project support** — Single server serves multiple projects via URL prefix isolation
 - **Markdown preview** — GFM support, syntax highlighting (highlight.js), clean typography
 - **DrawIO preview** — Embedded draw.io viewer for `.drawio` diagrams
-- **File browser** — Tree view of all `.md` / `.drawio` files in your project
+- **HTML preview** — Sandboxed iframe preview for `.html` / `.htm` files
+- **CSV preview** — Tabular rendering with rainbow-striped rows for `.csv` files
+- **Code preview** — Syntax-highlighted preview for 40+ languages (TypeScript, Python, Rust, Go, etc.)
+- **File browser** — Tree view of all previewable files in your project
+- **Sidebar navigation** — Collapsible file tree in preview pages for quick switching
+- **TUI integration** — Sidebar widget and command palette entries in the OpenCode terminal UI
 - **Live reload** — WebSocket-based auto-refresh on file save
 - **Dark mode** — Follows system preference
 - **Path security** — Only serves files within the project directory
@@ -20,7 +25,15 @@ Add to your `opencode.json`:
 
 ```json
 {
-  "plugin": ["opencode-preview"]
+  "plugin": ["Edison-A-N/opencode-preview"]
+}
+```
+
+Or pin a specific version:
+
+```json
+{
+  "plugin": ["Edison-A-N/opencode-preview@v0.2.0"]
 }
 ```
 
@@ -28,17 +41,11 @@ The preview server starts automatically when OpenCode launches. A `preview` tool
 
 ### As Local Plugin
 
-Copy to your project's plugin directory:
+Clone and symlink to your project's plugin directory:
 
 ```bash
-# Clone into .opencode/plugins/
-cp -r /path/to/opencode-preview .opencode/plugins/opencode-preview
-```
-
-Or symlink it:
-
-```bash
-ln -s ~/github/opencode-preview .opencode/plugins/opencode-preview
+git clone https://github.com/Edison-A-N/opencode-preview.git
+ln -s $(pwd)/opencode-preview .opencode/plugins/opencode-preview
 ```
 
 ### Standalone Server
@@ -63,12 +70,15 @@ Then open `http://localhost:17890` in your browser (redirects to the project's p
 
 ```
 src/
-├── index.ts           # OpenCode plugin entry
+├── index.ts           # OpenCode plugin entry (server plugin)
+├── tui.tsx            # OpenCode TUI plugin (sidebar widget + commands)
 ├── server.ts          # Bun.serve() HTTP server + WebSocket
 ├── renderers/
 │   ├── code.ts        # Syntax-highlighted code preview
-│   ├── markdown.ts    # marked + CDN highlight.js
-│   └── drawio.ts      # CDN draw.io viewer
+│   ├── csv.ts         # CSV table renderer with rainbow rows
+│   ├── drawio.ts      # CDN draw.io viewer
+│   ├── html.ts        # Sandboxed iframe HTML preview
+│   └── markdown.ts    # marked + CDN highlight.js
 └── templates/
     ├── browser.html   # File browser page
     └── styles.css     # Shared styles (light/dark)
@@ -82,7 +92,7 @@ Each registered project gets a URL prefix derived from its directory name (e.g.,
 |---|---|
 | `GET /` | 302 redirect to default project |
 | `GET /:prefix/` | File browser UI for the project |
-| `GET /:prefix/preview?file=<path>` | Render a file (Markdown, DrawIO, or code) |
+| `GET /:prefix/preview?file=<path>` | Render a file (Markdown, DrawIO, HTML, CSV, or code) |
 | `GET /:prefix/api/files` | JSON list of previewable files |
 | `GET /:prefix/api/file?path=<path>` | Raw file content |
 | `GET /:prefix/styles.css` | Stylesheet |
