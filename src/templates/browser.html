@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Preview Browser</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/{{PREFIX}}/styles.css" />
   </head>
   <body>
     <main class="browser-shell">
@@ -15,7 +15,7 @@
 
       <section class="file-list-panel">
         <div class="panel-title-row">
-          <h2>Markdown & DrawIO Files</h2>
+          <h2>Previewable Files</h2>
           <button id="refresh" type="button">Refresh</button>
         </div>
         <ul id="file-list" class="file-list"></ul>
@@ -25,7 +25,8 @@
     <script>
       const fileList = document.getElementById("file-list");
       const refreshButton = document.getElementById("refresh");
-      const dirParams = "{{DIR_PARAMS}}";
+      const prefix = "{{PREFIX}}";
+      const worktreeParams = "{{WORKTREE_PARAMS}}";
 
       const escapeHtml = (value) => value
         .replaceAll("&", "&amp;")
@@ -37,12 +38,13 @@
       const iconFor = (file) => {
         if (file.endsWith(".drawio")) return "📊";
         if (file.endsWith(".md")) return "📄";
+        if (file.endsWith(".html") || file.endsWith(".htm")) return "🌐";
         return "💻";
       };
 
       function buildHref(file) {
-        let href = "/preview?file=" + encodeURIComponent(file);
-        if (dirParams) href += "&" + dirParams;
+        let href = "/" + prefix + "/preview?file=" + encodeURIComponent(file);
+        if (worktreeParams) href += "&" + worktreeParams;
         return href;
       }
 
@@ -78,8 +80,8 @@
 
       async function loadFiles() {
         fileList.innerHTML = "<li class=\"file-empty\">Loading...</li>";
-        let apiUrl = "/api/files";
-        if (dirParams) apiUrl += "?" + dirParams;
+        let apiUrl = "/" + prefix + "/api/files";
+        if (worktreeParams) apiUrl += "?" + worktreeParams;
         const response = await fetch(apiUrl);
         if (!response.ok) {
           fileList.innerHTML = "<li class=\"file-empty\">Failed to load files.</li>";
@@ -90,7 +92,7 @@
         const files = Array.isArray(data.files) ? data.files : [];
 
         if (files.length === 0) {
-          fileList.innerHTML = "<li class=\"file-empty\">No .md or .drawio files found.</li>";
+          fileList.innerHTML = "<li class=\"file-empty\">No previewable files found.</li>";
           return;
         }
 

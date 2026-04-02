@@ -3,14 +3,20 @@ import { readdir, readFile, stat } from "fs/promises"
 import path from "path"
 
 import { renderCodeBody } from "./renderers/code"
+import { renderCsvBody } from "./renderers/csv"
 import { renderDrawioBody } from "./renderers/drawio"
+import { renderHtmlBody } from "./renderers/html"
 import { renderMarkdownBody } from "./renderers/markdown"
 
-let server: Bun.Server | null = null
-let defaultRootDirectory = ""
+let server: Bun.Server<{ rootDir: string }> | null = null
 let activePort = 17890
+let defaultPrefix = ""
+
+// prefix → rootDir mapping
+const registeredProjects = new Map<string, string>()
+
 const dirWatchers = new Map<string, { watchers: FSWatcher[]; refCount: number }>()
-const wsClients = new Set<Bun.ServerWebSocket<{ dir: string }>>()
+const wsClients = new Set<Bun.ServerWebSocket<{ rootDir: string }>>()
 
 const CODE_EXTENSIONS: Record<string, string> = {
   ".ts": "typescript",
@@ -37,7 +43,6 @@ const CODE_EXTENSIONS: Record<string, string> = {
   ".zsh": "bash",
   ".fish": "fish",
   ".sql": "sql",
-  ".html": "html",
   ".css": "css",
   ".scss": "scss",
   ".less": "less",
@@ -81,7 +86,7 @@ const SPECIAL_FILENAMES: Record<string, string> = {
 
 export function isPreviewable(filePath: string): boolean {
   const ext = path.extname(filePath).toLowerCase()
-  if (ext === ".md" || ext === ".drawio") return true
+  if (ext === ".md" || ext === ".drawio" || ext === ".html" || ext === ".htm" || ext === ".csv") return true
   if (ext in CODE_EXTENSIONS) return true
   const basename = path.basename(filePath)
   return basename in SPECIAL_FILENAMES
@@ -111,7 +116,7 @@ async function collectPreviewFiles(directory: string, base = directory): Promise
     entries.map(async (entry) => {
       const absolutePath = path.join(directory, entry.name)
       if (entry.isDirectory()) {
-        if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith(".")) {
+        if (IGNORED_DIRS.has(entry.name)) {
           return []
         }
         return collectPreviewFiles(absolutePath, base)
@@ -126,7 +131,6 @@ async function collectPreviewFiles(directory: string, base = directory): Promise
 }
 
 async function resolveWorktreePath(baseDir: string, worktreeName: string): Promise<string> {
-  // .git can be a directory (normal repo) or a file pointing to the real gitdir (worktree checkout)
   const gitPath = path.join(baseDir, ".git")
   let gitDir: string
 
@@ -135,7 +139,6 @@ async function resolveWorktreePath(baseDir: string, worktreeName: string): Promi
     if (gitStat.isDirectory()) {
       gitDir = gitPath
     } else {
-      // .git is a file (worktree checkout) — follow the pointer to the real gitdir
       const content = await readFile(gitPath, "utf-8")
       const match = content.trim().match(/^gitdir:\s*(.+)$/)
       if (!match) throw new Error("Invalid .git file format")
@@ -149,7 +152,6 @@ async function resolveWorktreePath(baseDir: string, worktreeName: string): Promi
   const worktreeGitDir = path.join(gitDir, "worktrees", worktreeName, "gitdir")
   try {
     const gitdirContent = await readFile(worktreeGitDir, "utf-8")
-    // gitdir contains path like "/home/user/.../worktree-name/.git" — parent is the checkout dir
     const worktreeDotGit = gitdirContent.trim()
     const worktreeDir = path.dirname(worktreeDotGit)
 
@@ -166,48 +168,29 @@ async function resolveWorktreePath(baseDir: string, worktreeName: string): Promi
   }
 }
 
-async function resolveRootDir(url: URL): Promise<string> {
+async function resolveRootDir(projectRootDir: string, url: URL): Promise<string> {
   const worktreeName = url.searchParams.get("worktree")
-  const dirParam = url.searchParams.get("dir")
-
   if (worktreeName) {
-    const baseDir = dirParam ? path.resolve(dirParam) : defaultRootDirectory
-    return resolveWorktreePath(baseDir, worktreeName)
+    return resolveWorktreePath(projectRootDir, worktreeName)
   }
-
-  if (dirParam) {
-    const resolved = path.resolve(dirParam)
-    if (!resolved.startsWith(`${defaultRootDirectory}${path.sep}`) && resolved !== defaultRootDirectory) {
-      throw new Error(`Directory is outside of default root: ${resolved}`)
-    }
-    const dirStat = await stat(resolved)
-    if (!dirStat.isDirectory()) {
-      throw new Error(`Not a directory: ${resolved}`)
-    }
-    return resolved
-  }
-
-  return defaultRootDirectory
+  return projectRootDir
 }
 
-function dirQueryString(url: URL): string {
-  const parts: string[] = []
-  const dir = url.searchParams.get("dir")
+function worktreeQueryString(url: URL): string {
   const worktree = url.searchParams.get("worktree")
-  if (dir) parts.push(`dir=${encodeURIComponent(dir)}`)
-  if (worktree) parts.push(`worktree=${encodeURIComponent(worktree)}`)
-  return parts.length > 0 ? parts.join("&") : ""
+  return worktree ? `worktree=${encodeURIComponent(worktree)}` : ""
 }
 
-function createLiveReloadScript(dirParams: string): string {
-  const wsParams = dirParams ? `?${dirParams}` : ""
+function createLiveReloadScript(prefix: string, worktreeParams: string): string {
+  const wsPath = `/${prefix}/ws`
+  const wsParams = worktreeParams ? `?${worktreeParams}` : ""
   return `<script>
 (() => {
   let socket;
   let timer;
   const connect = () => {
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    socket = new WebSocket(protocol + "://" + window.location.host + "/ws${wsParams}");
+    socket = new WebSocket(protocol + "://" + window.location.host + "${wsPath}${wsParams}");
     socket.onmessage = () => window.location.reload();
     socket.onclose = () => {
       clearTimeout(timer);
@@ -219,13 +202,15 @@ function createLiveReloadScript(dirParams: string): string {
 </script>`
 }
 
-function createSidebarScript(currentFile: string, dirParams: string): string {
+function createSidebarScript(prefix: string, currentFile: string, worktreeParams: string): string {
   const escaped = JSON.stringify(currentFile)
-  const escapedDirParams = JSON.stringify(dirParams)
+  const escapedPrefix = JSON.stringify(prefix)
+  const escapedWorktreeParams = JSON.stringify(worktreeParams)
   return `<script>
 (() => {
   const currentFile = ${escaped};
-  const dirParams = ${escapedDirParams};
+  const prefix = ${escapedPrefix};
+  const worktreeParams = ${escapedWorktreeParams};
   const sidebar = document.getElementById("preview-sidebar");
 
   const escapeHtml = (v) => v
@@ -235,12 +220,14 @@ function createSidebarScript(currentFile: string, dirParams: string): string {
   const iconFor = (f) => {
     if (f.endsWith(".drawio")) return "📊";
     if (f.endsWith(".md")) return "📄";
+    if (f.endsWith(".html") || f.endsWith(".htm")) return "🌐";
+    if (f.endsWith(".csv")) return "📋";
     return "💻";
   };
 
   function buildHref(file) {
-    let href = "/preview?file=" + encodeURIComponent(file);
-    if (dirParams) href += "&" + dirParams;
+    let href = "/" + prefix + "/preview?file=" + encodeURIComponent(file);
+    if (worktreeParams) href += "&" + worktreeParams;
     return href;
   }
 
@@ -275,8 +262,8 @@ function createSidebarScript(currentFile: string, dirParams: string): string {
   async function loadSidebar() {
     sidebar.innerHTML = '<div class="sidebar-loading">Loading...</div>';
     try {
-      let apiUrl = "/api/files";
-      if (dirParams) apiUrl += "?" + dirParams;
+      let apiUrl = "/" + prefix + "/api/files";
+      if (worktreeParams) apiUrl += "?" + worktreeParams;
       const resp = await fetch(apiUrl);
       const data = await resp.json();
       const files = Array.isArray(data.files) ? data.files : [];
@@ -297,14 +284,21 @@ function createSidebarScript(currentFile: string, dirParams: string): string {
 </script>`
 }
 
-function wrapWithSidebar(title: string, innerBody: string, currentFile: string, dirParams: string, rootDir: string): string {
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (ch) => {
+    const map: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }
+    return map[ch]
+  })
+}
+
+function wrapWithSidebar(prefix: string, title: string, innerBody: string, currentFile: string, worktreeParams: string, rootDir: string): string {
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${title}</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <title>${escapeHtml(title)}</title>
+    <link rel="stylesheet" href="/${prefix}/styles.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css" media="(prefers-color-scheme: light)" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css" media="(prefers-color-scheme: dark)" />
   </head>
@@ -312,14 +306,14 @@ function wrapWithSidebar(title: string, innerBody: string, currentFile: string, 
     <div class="preview-layout">
       <nav id="preview-sidebar" class="preview-sidebar"></nav>
       <div class="preview-content">
-        <div class="dir-indicator"><code>${rootDir}</code></div>
+        <div class="dir-indicator"><code>${escapeHtml(rootDir)}</code></div>
         ${innerBody}
       </div>
     </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
     <script>document.querySelectorAll("pre code").forEach(b => window.hljs?.highlightElement(b));</script>
-    ${createSidebarScript(currentFile, dirParams)}
-    ${createLiveReloadScript(dirParams)}
+    ${createSidebarScript(prefix, currentFile, worktreeParams)}
+    ${createLiveReloadScript(prefix, worktreeParams)}
   </body>
 </html>`
 }
@@ -331,6 +325,12 @@ function contentTypeFromPath(filePath: string): string {
   }
   if (ext === ".drawio") {
     return "application/xml; charset=utf-8"
+  }
+  if (ext === ".csv") {
+    return "text/csv; charset=utf-8"
+  }
+  if (ext === ".html" || ext === ".htm") {
+    return "text/html; charset=utf-8"
   }
   return "text/plain; charset=utf-8"
 }
@@ -357,7 +357,7 @@ async function listDirectories(directory: string): Promise<string[]> {
   const result = [directory]
   const entries = await readdir(directory, { withFileTypes: true })
   for (const entry of entries) {
-    if (!entry.isDirectory() || IGNORED_DIRS.has(entry.name) || entry.name.startsWith(".")) {
+    if (!entry.isDirectory() || IGNORED_DIRS.has(entry.name)) {
       continue
     }
     const child = path.join(directory, entry.name)
@@ -369,7 +369,7 @@ async function listDirectories(directory: string): Promise<string[]> {
 function broadcastChange(changedDir: string): void {
   const message = JSON.stringify({ type: "file-changed" })
   for (const client of wsClients) {
-    if (client.data.dir === changedDir) {
+    if (client.data.rootDir === changedDir) {
       client.send(message)
     }
   }
@@ -401,48 +401,114 @@ async function ensureWatchers(dir: string): Promise<void> {
   dirWatchers.set(dir, { watchers: watcherList, refCount: 1 })
 }
 
-async function renderBrowserPage(rootDir: string, dirParams: string): Promise<string> {
+async function renderBrowserPage(prefix: string, rootDir: string, worktreeParams: string): Promise<string> {
   const templatePath = path.join(import.meta.dir, "templates", "browser.html")
   const template = await Bun.file(templatePath).text()
   return template
     .replaceAll("{{PROJECT_DIRECTORY}}", rootDir)
-    .replaceAll("{{DIR_PARAMS}}", dirParams)
-    .replace("</body>", `${createLiveReloadScript(dirParams)}</body>`)
+    .replaceAll("{{PREFIX}}", prefix)
+    .replaceAll("{{WORKTREE_PARAMS}}", worktreeParams)
+    .replace("</body>", `${createLiveReloadScript(prefix, worktreeParams)}</body>`)
 }
 
-export async function startServer(directory: string, port = Number(process.env.PREVIEW_PORT ?? "17890")): Promise<number> {
+/** Parse the URL prefix from pathname. Returns { prefix, rest } or null if no valid prefix. */
+function parsePrefix(pathname: string): { prefix: string; rest: string } | null {
+  const slashIdx = pathname.indexOf("/", 1)
+  const prefix = slashIdx === -1 ? pathname.slice(1) : pathname.slice(1, slashIdx)
+  if (!prefix || !registeredProjects.has(prefix)) return null
+  const rest = slashIdx === -1 ? "/" : pathname.slice(slashIdx)
+  return { prefix, rest }
+}
+
+/** Generate a unique prefix from a directory basename. Appends -2, -3, etc. on conflict. */
+function generatePrefix(rootDir: string): string {
+  const base = path.basename(rootDir) || "project"
+  if (!registeredProjects.has(base)) return base
+  let counter = 2
+  while (registeredProjects.has(`${base}-${counter}`)) {
+    counter++
+  }
+  return `${base}-${counter}`
+}
+
+/**
+ * Register a project directory for serving under a URL prefix.
+ * Returns the assigned prefix. If the directory is already registered, returns its existing prefix.
+ * Server must be started first via `startServer`.
+ */
+export async function registerProject(rootDir: string): Promise<string> {
+  const resolved = path.resolve(rootDir)
+
+  // Check if already registered
+  for (const [prefix, dir] of registeredProjects) {
+    if (dir === resolved) return prefix
+  }
+
+  const prefix = generatePrefix(resolved)
+  registeredProjects.set(prefix, resolved)
+  await ensureWatchers(resolved)
+
+  // Set default prefix to the first registered project
+  if (!defaultPrefix) {
+    defaultPrefix = prefix
+  }
+
+  return prefix
+}
+
+/**
+ * Start the preview server. Does not register any project — call `registerProject` separately.
+ * Returns the port the server is listening on.
+ */
+export async function startServer(port = Number(process.env.PREVIEW_PORT ?? "17890")): Promise<number> {
   if (server) {
     return activePort
   }
 
-  defaultRootDirectory = path.resolve(directory)
   activePort = Number.isNaN(port) ? 17890 : port
 
-  await ensureWatchers(defaultRootDirectory)
-
-  server = Bun.serve<{ dir: string }>({
-    hostname: "127.0.0.1",
+  server = Bun.serve<{ rootDir: string }>({
+    hostname: "0.0.0.0",
     port: activePort,
     fetch: async (request, serverInstance) => {
       const url = new URL(request.url)
-      const dqStr = dirQueryString(url)
 
-      if (url.pathname === "/ws") {
+      // Root path → redirect to default project
+      if (url.pathname === "/") {
+        if (!defaultPrefix) {
+          return new Response("No projects registered", { status: 404 })
+        }
+        return Response.redirect(`/${defaultPrefix}/`, 302)
+      }
+
+      // Parse prefix from URL
+      const parsed = parsePrefix(url.pathname)
+      if (!parsed) {
+        return new Response("Not Found", { status: 404 })
+      }
+
+      const { prefix, rest } = parsed
+      const projectRootDir = registeredProjects.get(prefix)!
+      const wtParams = worktreeQueryString(url)
+
+      // WebSocket upgrade: /:prefix/ws
+      if (rest === "/ws") {
         let rootDir: string
         try {
-          rootDir = await resolveRootDir(url)
+          rootDir = await resolveRootDir(projectRootDir, url)
         } catch {
-          rootDir = defaultRootDirectory
+          rootDir = projectRootDir
         }
         await ensureWatchers(rootDir)
-        const upgraded = serverInstance.upgrade(request, { data: { dir: rootDir } })
+        const upgraded = serverInstance.upgrade(request, { data: { rootDir } })
         if (upgraded) {
           return undefined
         }
         return new Response("WebSocket upgrade failed", { status: 400 })
       }
 
-      if (url.pathname === "/styles.css") {
+      // Static: /:prefix/styles.css
+      if (rest === "/styles.css") {
         const cssPath = path.join(import.meta.dir, "templates", "styles.css")
         const css = await Bun.file(cssPath).text()
         return new Response(css, { headers: { "content-type": "text/css; charset=utf-8" } })
@@ -450,24 +516,27 @@ export async function startServer(directory: string, port = Number(process.env.P
 
       let rootDir: string
       try {
-        rootDir = await resolveRootDir(url)
+        rootDir = await resolveRootDir(projectRootDir, url)
       } catch (error) {
         const message = error instanceof Error ? error.message : "Invalid directory"
         return new Response(message, { status: 400 })
       }
 
-      if (url.pathname === "/") {
-        return new Response(await renderBrowserPage(rootDir, dqStr), {
+      // Browser page: /:prefix/
+      if (rest === "/") {
+        return new Response(await renderBrowserPage(prefix, rootDir, wtParams), {
           headers: { "content-type": "text/html; charset=utf-8" },
         })
       }
 
-      if (url.pathname === "/api/files") {
+      // API: file listing: /:prefix/api/files
+      if (rest === "/api/files") {
         const files = await collectPreviewFiles(rootDir)
         return Response.json({ files, directory: rootDir })
       }
 
-      if (url.pathname === "/api/file") {
+      // API: raw file content: /:prefix/api/file
+      if (rest === "/api/file") {
         const relativePath = url.searchParams.get("path")
         if (!relativePath) {
           return new Response("Missing path query parameter", { status: 400 })
@@ -489,7 +558,8 @@ export async function startServer(directory: string, port = Number(process.env.P
         }
       }
 
-      if (url.pathname === "/preview") {
+      // Preview page: /:prefix/preview
+      if (rest === "/preview") {
         const relativePath = url.searchParams.get("file")
         if (!relativePath) {
           return new Response("Missing file query parameter", { status: 400 })
@@ -507,14 +577,28 @@ export async function startServer(directory: string, port = Number(process.env.P
 
           if (extension === ".md") {
             const body = await renderMarkdownBody(content)
-            return new Response(wrapWithSidebar(relativePath, body, relativePath, dqStr, rootDir), {
+            return new Response(wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir), {
               headers: { "content-type": "text/html; charset=utf-8" },
             })
           }
 
           if (extension === ".drawio") {
             const body = renderDrawioBody(content)
-            return new Response(wrapWithSidebar(relativePath, body, relativePath, dqStr, rootDir), {
+            return new Response(wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir), {
+              headers: { "content-type": "text/html; charset=utf-8" },
+            })
+          }
+
+          if (extension === ".html" || extension === ".htm") {
+            const body = renderHtmlBody(prefix, relativePath, wtParams)
+            return new Response(wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir), {
+              headers: { "content-type": "text/html; charset=utf-8" },
+            })
+          }
+
+          if (extension === ".csv") {
+            const body = renderCsvBody(content)
+            return new Response(wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir), {
               headers: { "content-type": "text/html; charset=utf-8" },
             })
           }
@@ -522,7 +606,7 @@ export async function startServer(directory: string, port = Number(process.env.P
           const lang = getCodeLanguage(absolutePath)
           if (lang) {
             const body = renderCodeBody(content, lang)
-            return new Response(wrapWithSidebar(relativePath, body, relativePath, dqStr, rootDir), {
+            return new Response(wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir), {
               headers: { "content-type": "text/html; charset=utf-8" },
             })
           }
@@ -539,11 +623,14 @@ export async function startServer(directory: string, port = Number(process.env.P
       open(ws) {
         wsClients.add(ws)
       },
+      message() {},
       close(ws) {
         wsClients.delete(ws)
-        const dir = ws.data.dir
+        const dir = ws.data.rootDir
         const entry = dirWatchers.get(dir)
-        if (entry && dir !== defaultRootDirectory) {
+        // Only decrement refCount for non-primary project dirs (worktree dirs)
+        const isPrimaryDir = [...registeredProjects.values()].includes(dir)
+        if (entry && !isPrimaryDir) {
           entry.refCount--
           if (entry.refCount <= 0) {
             closeWatchersForDir(dir)
@@ -565,6 +652,9 @@ export function stopServer(): void {
     client.close()
   }
   wsClients.clear()
+  registeredProjects.clear()
+  defaultPrefix = ""
+  activePort = 0
   server.stop(true)
   server = null
 }
@@ -572,9 +662,10 @@ export function stopServer(): void {
 if (import.meta.main) {
   const directory = process.argv[2] ? path.resolve(process.argv[2]) : process.cwd()
   const port = Number(process.env.PREVIEW_PORT ?? "17890")
-  const startedPort = await startServer(directory, port)
+  const startedPort = await startServer(port)
+  const prefix = await registerProject(directory)
   console.log(`Preview server running at http://127.0.0.1:${startedPort}`)
-  console.log(`  Default directory: ${path.resolve(directory)}`)
-  console.log(`  Use ?dir=<subdirectory> to preview a subdirectory`)
+  console.log(`  Project: ${path.resolve(directory)}`)
+  console.log(`  Browse:  http://127.0.0.1:${startedPort}/${prefix}/`)
   console.log(`  Use ?worktree=name to preview a git worktree`)
 }

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { ensureInsideRoot, isPreviewable, getCodeLanguage } from "../src/server"
 import { renderMarkdownBody } from "../src/renderers/markdown"
 import { renderCodeBody } from "../src/renderers/code"
+import { renderHtmlBody } from "../src/renderers/html"
 
 describe("isPreviewable", () => {
   test("accepts markdown files", () => {
@@ -11,6 +12,11 @@ describe("isPreviewable", () => {
 
   test("accepts drawio files", () => {
     expect(isPreviewable("diagram.drawio")).toBe(true)
+  })
+
+  test("accepts html files", () => {
+    expect(isPreviewable("page.html")).toBe(true)
+    expect(isPreviewable("index.htm")).toBe(true)
   })
 
   test("accepts code files", () => {
@@ -49,6 +55,8 @@ describe("getCodeLanguage", () => {
   test("returns null for non-code files", () => {
     expect(getCodeLanguage("file.md")).toBeNull()
     expect(getCodeLanguage("file.png")).toBeNull()
+    expect(getCodeLanguage("file.html")).toBeNull()
+    expect(getCodeLanguage("file.htm")).toBeNull()
   })
 })
 
@@ -103,5 +111,32 @@ describe("renderCodeBody", () => {
   test("shows line count", () => {
     const result = renderCodeBody("line1\nline2\nline3", "text")
     expect(result).toContain("3 lines")
+  })
+})
+
+describe("renderHtmlBody", () => {
+  test("renders iframe with correct src", () => {
+    const result = renderHtmlBody("my-project", "pages/index.html", "")
+    expect(result).toContain('class="html-preview-body"')
+    expect(result).toContain("<iframe")
+    expect(result).toContain("/my-project/api/file?path=pages%2Findex.html")
+    expect(result).toContain("sandbox=")
+  })
+
+  test("includes worktree params in iframe src", () => {
+    const result = renderHtmlBody("proj", "page.html", "worktree=feature-branch")
+    expect(result).toContain("/proj/api/file?path=page.html&worktree=feature-branch")
+  })
+
+  test("includes open in new tab link", () => {
+    const result = renderHtmlBody("proj", "page.html", "")
+    expect(result).toContain("Open in new tab")
+    expect(result).toContain("target=\"_blank\"")
+  })
+
+  test("shows HTML Preview badge", () => {
+    const result = renderHtmlBody("proj", "page.html", "")
+    expect(result).toContain("HTML Preview")
+    expect(result).toContain('class="html-badge"')
   })
 })

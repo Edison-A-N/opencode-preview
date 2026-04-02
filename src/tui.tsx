@@ -1,7 +1,7 @@
 import type { TuiPlugin, TuiPluginModule, TuiSlotPlugin } from "@opencode-ai/plugin/tui"
 import { spawn } from "node:child_process"
 import path from "node:path"
-import { isPreviewable as serverIsPreviewable } from "./server"
+import { isPreviewable as serverIsPreviewable, registerProject } from "./server"
 
 const DEFAULT_PORT = Number(process.env.PREVIEW_PORT ?? "17890")
 
@@ -25,43 +25,46 @@ function getWorktreeName(worktreePath: string, directory: string): string | unde
   return path.basename(worktreePath)
 }
 
-function buildUrl(baseUrl: string, pathname: string, params: Record<string, string | undefined>): string {
+function buildUrl(baseUrl: string, prefix: string, pathname: string, params: Record<string, string | undefined>): string {
   const qs = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
     if (v) qs.set(k, v)
   }
   const query = qs.toString()
-  return query ? `${baseUrl}${pathname}?${query}` : `${baseUrl}${pathname}`
+  const prefixedPath = `/${prefix}${pathname}`
+  return query ? `${baseUrl}${prefixedPath}?${query}` : `${baseUrl}${prefixedPath}`
 }
 
-function previewUrl(baseUrl: string, file: string, worktree?: string): string {
-  return buildUrl(baseUrl, "/preview", { file, worktree })
+function previewUrl(baseUrl: string, prefix: string, file: string, worktree?: string): string {
+  return buildUrl(baseUrl, prefix, "/preview", { file, worktree })
 }
 
-function browserUrl(baseUrl: string, worktree?: string): string {
-  return buildUrl(baseUrl, "/", { worktree })
+function browserUrl(baseUrl: string, prefix: string, worktree?: string): string {
+  return buildUrl(baseUrl, prefix, "/", { worktree })
 }
 
 export const tui: TuiPlugin = async (api) => {
   const baseUrl = `http://localhost:${DEFAULT_PORT}`
-  const worktree = getWorktreeName(api.state.path.worktree, api.state.path.directory)
+  const directory = api.state.path.directory
+  const prefix = await registerProject(directory)
+  const worktree = getWorktreeName(api.state.path.worktree, directory)
 
   api.command.register(() => {
     const route = api.route.current
-    if (route.name !== "session") return [openBrowserCommand(baseUrl, api, worktree)]
+    if (route.name !== "session") return [openBrowserCommand(baseUrl, prefix, api, worktree)]
 
     const files = api.state.session.diff(route.params.sessionID)
     const previewable = files.filter((f) => isPreviewable(f.file))
 
     return [
-      openBrowserCommand(baseUrl, api, worktree),
+      openBrowserCommand(baseUrl, prefix, api, worktree),
       ...previewable.map((f) => ({
         title: `Preview: ${f.file}`,
         value: `preview:file:${f.file}`,
         description: `Open ${f.file} in browser preview`,
         category: "Preview",
         onSelect() {
-          const url = previewUrl(baseUrl, f.file, worktree)
+          const url = previewUrl(baseUrl, prefix, f.file, worktree)
           openUrl(url)
           api.ui.toast({ variant: "info", message: `Preview: ${f.file}`, duration: 2000 })
         },
@@ -82,13 +85,13 @@ export const tui: TuiPlugin = async (api) => {
             </text>
             <box flexDirection="row" gap={1}>
               <text dimColor>{worktree ? "🌿" : "📂"}</text>
-              <a href={browserUrl(baseUrl, worktree)} color="cyan">
+              <a href={browserUrl(baseUrl, prefix, worktree)} color="cyan">
                 {worktree ?? "Browse Files"}
               </a>
             </box>
             {previewable.map((f) => {
               const icon = f.file.endsWith(".drawio") ? "📊" : "📄"
-              const url = previewUrl(baseUrl, f.file, worktree)
+              const url = previewUrl(baseUrl, prefix, f.file, worktree)
               return (
                 <box flexDirection="row" gap={1}>
                   <text dimColor>{icon}</text>
@@ -109,10 +112,11 @@ export const tui: TuiPlugin = async (api) => {
 
 function openBrowserCommand(
   baseUrl: string,
+  prefix: string,
   api: Parameters<TuiPlugin>[0],
   worktree?: string,
 ) {
-  const url = browserUrl(baseUrl, worktree)
+  const url = browserUrl(baseUrl, prefix, worktree)
   const label = worktree ? `Open Preview (${worktree})` : "Open Preview"
   return {
     title: label,

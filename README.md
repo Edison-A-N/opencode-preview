@@ -4,6 +4,7 @@ OpenCode plugin that auto-starts a file preview server for Markdown and DrawIO f
 
 ## Features
 
+- **Multi-project support** — Single server serves multiple projects via URL prefix isolation
 - **Markdown preview** — GFM support, syntax highlighting (highlight.js), clean typography
 - **DrawIO preview** — Embedded draw.io viewer for `.drawio` diagrams
 - **File browser** — Tree view of all `.md` / `.drawio` files in your project
@@ -50,7 +51,7 @@ bun run dev                          # Preview current directory
 bun run src/server.ts /path/to/project  # Preview specific directory
 ```
 
-Then open `http://localhost:17890` in your browser.
+Then open `http://localhost:17890` in your browser (redirects to the project's prefixed URL).
 
 ## Configuration
 
@@ -75,14 +76,19 @@ src/
 
 ## API Routes
 
+Each registered project gets a URL prefix derived from its directory name (e.g., `my-project`).
+
 | Route | Description |
 |---|---|
-| `GET /` | File browser UI |
-| `GET /preview?file=<path>` | Render a file (Markdown or DrawIO) |
-| `GET /api/files` | JSON list of previewable files |
-| `GET /api/file?path=<path>` | Raw file content |
-| `GET /styles.css` | Stylesheet |
-| `WS /ws` | Live reload notifications |
+| `GET /` | 302 redirect to default project |
+| `GET /:prefix/` | File browser UI for the project |
+| `GET /:prefix/preview?file=<path>` | Render a file (Markdown, DrawIO, or code) |
+| `GET /:prefix/api/files` | JSON list of previewable files |
+| `GET /:prefix/api/file?path=<path>` | Raw file content |
+| `GET /:prefix/styles.css` | Stylesheet |
+| `WS /:prefix/ws` | Live reload notifications |
+
+All routes support an optional `?worktree=<name>` parameter to preview files from a git worktree.
 
 ## Requirements
 
