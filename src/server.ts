@@ -8,6 +8,13 @@ import { renderDrawioBody } from "./renderers/drawio"
 import { renderHtmlBody } from "./renderers/html"
 import { renderMarkdownBody } from "./renderers/markdown"
 
+// Eagerly resolve template paths at module load time (import.meta.dir is
+// correct when the module is first evaluated, but may become stale inside
+// async request handlers in certain plugin host environments such as OpenCode).
+const TEMPLATES_DIR = path.join(import.meta.dir, "templates")
+const BROWSER_HTML = await Bun.file(path.join(TEMPLATES_DIR, "browser.html")).text()
+const STYLES_CSS = await Bun.file(path.join(TEMPLATES_DIR, "styles.css")).text()
+
 let server: Bun.Server<{ rootDir: string }> | null = null
 let activePort = 17890
 let defaultPrefix = ""
@@ -553,9 +560,7 @@ async function ensureWatchers(dir: string): Promise<void> {
 }
 
 async function renderBrowserPage(prefix: string, rootDir: string, worktreeParams: string): Promise<string> {
-  const templatePath = path.join(import.meta.dir, "templates", "browser.html")
-  const template = await Bun.file(templatePath).text()
-  return template
+  return BROWSER_HTML
     .replaceAll("{{PROJECT_DIRECTORY}}", rootDir)
     .replaceAll("{{PREFIX}}", prefix)
     .replaceAll("{{WORKTREE_PARAMS}}", worktreeParams)
@@ -660,9 +665,7 @@ export async function startServer(port = Number(process.env.PREVIEW_PORT ?? "178
 
       // Static: /:prefix/styles.css
       if (rest === "/styles.css") {
-        const cssPath = path.join(import.meta.dir, "templates", "styles.css")
-        const css = await Bun.file(cssPath).text()
-        return new Response(css, { headers: { "content-type": "text/css; charset=utf-8" } })
+        return new Response(STYLES_CSS, { headers: { "content-type": "text/css; charset=utf-8" } })
       }
 
       let rootDir: string
