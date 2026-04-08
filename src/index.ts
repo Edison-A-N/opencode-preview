@@ -29,18 +29,26 @@ type PluginContext = Parameters<Plugin>[0]
 
 export const server: Plugin = async ({ directory, client, $, worktree }) => {
   const projectDirectory = worktree || directory
-  const port = await startServer(DEFAULT_PORT)
-  const prefix = await registerProject(projectDirectory)
-  const baseUrl = `http://localhost:${port}`
 
-  await client.app.log({
-    body: {
-      service: "opencode-preview",
-      level: "info",
-      message: `Preview server started at ${baseUrl}/${prefix}/`,
-      extra: { directory: projectDirectory, port, prefix },
-    },
-  })
+  // Defer server startup to background so plugin init returns immediately
+  // and does not block opencode startup. The ready promise is awaited lazily
+  // when the preview tool is first invoked.
+  const ready = (async () => {
+    const port = await startServer(DEFAULT_PORT)
+    const prefix = await registerProject(projectDirectory)
+    const baseUrl = `http://localhost:${port}`
+
+    client.app.log({
+      body: {
+        service: "opencode-preview",
+        level: "info",
+        message: `Preview server started at ${baseUrl}/${prefix}/`,
+        extra: { directory: projectDirectory, port, prefix },
+      },
+    })
+
+    return { port, prefix, baseUrl }
+  })()
 
   return {
     tool: {
@@ -51,6 +59,7 @@ export const server: Plugin = async ({ directory, client, $, worktree }) => {
           worktree: tool.schema.string().optional().describe("Git worktree name to preview from (resolves via .git/worktrees/)"),
         },
         async execute(args) {
+          const { baseUrl, prefix } = await ready
           const file = args.file.trim()
           const params = new URLSearchParams({ file })
           if (args.worktree) params.set("worktree", args.worktree)

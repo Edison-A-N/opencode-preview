@@ -46,25 +46,36 @@ function browserUrl(baseUrl: string, prefix: string, worktree?: string): string 
 export const tui: TuiPlugin = async (api) => {
   const baseUrl = `http://localhost:${DEFAULT_PORT}`
   const directory = api.state.path.directory
-  const prefix = await registerProject(directory)
+  const prefixPromise = registerProject(directory)
   const worktree = getWorktreeName(api.state.path.worktree, directory)
 
+  let resolvedPrefix: string | undefined
+
+  async function getPrefix(): Promise<string> {
+    if (resolvedPrefix === undefined) {
+      resolvedPrefix = await prefixPromise
+    }
+    return resolvedPrefix
+  }
+
   api.command.register(() => {
+    const prefix = resolvedPrefix ?? directory.split("/").pop() ?? "project"
     const route = api.route.current
-    if (route.name !== "session") return [openBrowserCommand(baseUrl, prefix, api, worktree)]
+    if (route.name !== "session") return [openBrowserCommand(baseUrl, prefix, api, worktree, getPrefix)]
 
     const files = api.state.session.diff(route.params.sessionID)
     const previewable = files.filter((f) => isPreviewable(f.file))
 
     return [
-      openBrowserCommand(baseUrl, prefix, api, worktree),
+      openBrowserCommand(baseUrl, prefix, api, worktree, getPrefix),
       ...previewable.map((f) => ({
         title: `Preview: ${f.file}`,
         value: `preview:file:${f.file}`,
         description: `Open ${f.file} in browser preview`,
         category: "Preview",
-        onSelect() {
-          const url = previewUrl(baseUrl, prefix, f.file, worktree)
+        async onSelect() {
+          const p = await getPrefix()
+          const url = previewUrl(baseUrl, p, f.file, worktree)
           openUrl(url)
           api.ui.toast({ variant: "info", message: `Preview: ${f.file}`, duration: 2000 })
         },
@@ -75,6 +86,7 @@ export const tui: TuiPlugin = async (api) => {
   const slotPlugin: TuiSlotPlugin = {
     slots: {
       sidebar_content(_ctx, props) {
+        const prefix = resolvedPrefix ?? directory.split("/").pop() ?? "project"
         const files = api.state.session.diff(props.session_id)
         const previewable = files.filter((f) => isPreviewable(f.file))
 
@@ -115,6 +127,7 @@ function openBrowserCommand(
   prefix: string,
   api: Parameters<TuiPlugin>[0],
   worktree?: string,
+  getPrefix?: () => Promise<string>,
 ) {
   const url = browserUrl(baseUrl, prefix, worktree)
   const label = worktree ? `Open Preview (${worktree})` : "Open Preview"
@@ -123,9 +136,11 @@ function openBrowserCommand(
     value: "preview:open",
     description: "Open the preview file browser in your default browser",
     category: "Preview",
-    onSelect() {
-      openUrl(url)
-      api.ui.toast({ variant: "info", message: `Opened ${url}`, duration: 3000 })
+    async onSelect() {
+      const p = getPrefix ? await getPrefix() : prefix
+      const resolvedUrl = browserUrl(baseUrl, p, worktree)
+      openUrl(resolvedUrl)
+      api.ui.toast({ variant: "info", message: `Opened ${resolvedUrl}`, duration: 3000 })
     },
   }
 }

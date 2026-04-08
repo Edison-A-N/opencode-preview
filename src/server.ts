@@ -12,8 +12,25 @@ import { renderMarkdownBody } from "./renderers/markdown"
 // correct when the module is first evaluated, but may become stale inside
 // async request handlers in certain plugin host environments such as OpenCode).
 const TEMPLATES_DIR = path.join(import.meta.dir, "templates")
-const BROWSER_HTML = await Bun.file(path.join(TEMPLATES_DIR, "browser.html")).text()
-const STYLES_CSS = await Bun.file(path.join(TEMPLATES_DIR, "styles.css")).text()
+
+// Lazy-loaded templates — read from disk on first HTTP request instead of at
+// module load time so that importing this module never blocks plugin startup.
+let _browserHtml: string | undefined
+let _stylesCss: string | undefined
+
+async function getBrowserHtml(): Promise<string> {
+  if (_browserHtml === undefined) {
+    _browserHtml = await Bun.file(path.join(TEMPLATES_DIR, "browser.html")).text()
+  }
+  return _browserHtml
+}
+
+async function getStylesCss(): Promise<string> {
+  if (_stylesCss === undefined) {
+    _stylesCss = await Bun.file(path.join(TEMPLATES_DIR, "styles.css")).text()
+  }
+  return _stylesCss
+}
 
 let server: Bun.Server<{ rootDir: string }> | null = null
 let activePort = 17890
@@ -560,7 +577,7 @@ async function ensureWatchers(dir: string): Promise<void> {
 }
 
 async function renderBrowserPage(prefix: string, rootDir: string, worktreeParams: string): Promise<string> {
-  return BROWSER_HTML
+  return (await getBrowserHtml())
     .replaceAll("{{PROJECT_DIRECTORY}}", rootDir)
     .replaceAll("{{PREFIX}}", prefix)
     .replaceAll("{{WORKTREE_PARAMS}}", worktreeParams)
@@ -602,7 +619,9 @@ export async function registerProject(rootDir: string): Promise<string> {
 
   const prefix = generatePrefix(resolved)
   registeredProjects.set(prefix, resolved)
-  await ensureWatchers(resolved)
+
+  // Watchers are set up lazily on first WebSocket connection (see ws open
+  // handler) to avoid blocking plugin startup with recursive directory scans.
 
   // Set default prefix to the first registered project
   if (!defaultPrefix) {
@@ -644,6 +663,7 @@ export async function startServer(port = Number(process.env.PREVIEW_PORT ?? "178
       }
 
       const { prefix, rest } = parsed
+
       const projectRootDir = registeredProjects.get(prefix)!
       const wtParams = worktreeQueryString(url)
 
@@ -665,7 +685,7 @@ export async function startServer(port = Number(process.env.PREVIEW_PORT ?? "178
 
       // Static: /:prefix/styles.css
       if (rest === "/styles.css") {
-        return new Response(STYLES_CSS, { headers: { "content-type": "text/css; charset=utf-8" } })
+        return new Response(await getStylesCss(), { headers: { "content-type": "text/css; charset=utf-8" } })
       }
 
       let rootDir: string
@@ -780,8 +800,9 @@ export async function startServer(port = Number(process.env.PREVIEW_PORT ?? "178
       return new Response("Not Found", { status: 404 })
     },
     websocket: {
-      open(ws) {
+      async open(ws) {
         wsClients.add(ws)
+        await ensureWatchers(ws.data.rootDir)
       },
       message() {},
       close(ws) {
