@@ -1,6 +1,8 @@
-import { watch, type FSWatcher } from "fs"
-import { readdir, readFile, stat } from "fs/promises"
-import path from "path"
+import { type FSWatcher, watch } from "node:fs"
+import { readdir, readFile, stat } from "node:fs/promises"
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
+import path from "node:path"
+import { WebSocket, WebSocketServer } from "ws"
 
 import { renderCodeBody } from "./renderers/code"
 import { renderCsvBody } from "./renderers/csv"
@@ -20,19 +22,20 @@ let _stylesCss: string | undefined
 
 async function getBrowserHtml(): Promise<string> {
   if (_browserHtml === undefined) {
-    _browserHtml = await Bun.file(path.join(TEMPLATES_DIR, "browser.html")).text()
+    _browserHtml = await readFile(path.join(TEMPLATES_DIR, "browser.html"), "utf-8")
   }
   return _browserHtml
 }
 
 async function getStylesCss(): Promise<string> {
   if (_stylesCss === undefined) {
-    _stylesCss = await Bun.file(path.join(TEMPLATES_DIR, "styles.css")).text()
+    _stylesCss = await readFile(path.join(TEMPLATES_DIR, "styles.css"), "utf-8")
   }
   return _stylesCss
 }
 
-let server: Bun.Server<{ rootDir: string }> | null = null
+let server: import("node:http").Server | null = null
+let wss: WebSocketServer | null = null
 let activePort = 17890
 let defaultPrefix = ""
 
@@ -40,7 +43,8 @@ let defaultPrefix = ""
 const registeredProjects = new Map<string, string>()
 
 const dirWatchers = new Map<string, { watchers: FSWatcher[]; refCount: number }>()
-const wsClients = new Set<Bun.ServerWebSocket<{ rootDir: string }>>()
+const wsClients = new Set<WebSocket>()
+const wsClientMeta = new WeakMap<WebSocket, { rootDir: string }>()
 
 const CODE_EXTENSIONS: Record<string, string> = {
   ".ts": "typescript",
@@ -544,15 +548,214 @@ async function listDirectories(directory: string): Promise<string[]> {
 function broadcastChange(changedDir: string): void {
   const message = JSON.stringify({ type: "file-changed" })
   for (const client of wsClients) {
-    if (client.data.rootDir === changedDir) {
+    const metadata = wsClientMeta.get(client)
+    if (metadata?.rootDir === changedDir && client.readyState === WebSocket.OPEN) {
       client.send(message)
     }
   }
 }
 
+function parseRequestUrl(req: IncomingMessage): URL {
+  const host = req.headers.host ?? `127.0.0.1:${activePort}`
+  return new URL(req.url ?? "/", `http://${host}`)
+}
+
+function sendResponse(
+  res: ServerResponse,
+  status: number,
+  body: string,
+  headers: Record<string, string> = {},
+): void {
+  res.writeHead(status, headers)
+  res.end(body)
+}
+
+function sendJson(res: ServerResponse, payload: unknown, status = 200): void {
+  sendResponse(res, status, JSON.stringify(payload), { "content-type": "application/json; charset=utf-8" })
+}
+
+function sendRedirect(res: ServerResponse, location: string, status = 302): void {
+  sendResponse(res, status, "", { location })
+}
+
+function handleWebSocketClose(ws: WebSocket): void {
+  wsClients.delete(ws)
+  const dir = wsClientMeta.get(ws)?.rootDir
+  if (!dir) {
+    return
+  }
+  const entry = dirWatchers.get(dir)
+  const isPrimaryDir = [...registeredProjects.values()].includes(dir)
+  if (entry && !isPrimaryDir) {
+    entry.refCount--
+    if (entry.refCount <= 0) {
+      closeWatchersForDir(dir)
+    }
+  }
+}
+
+async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const url = parseRequestUrl(req)
+
+  if (url.pathname === "/") {
+    if (!defaultPrefix) {
+      sendResponse(res, 404, "No projects registered")
+      return
+    }
+    sendRedirect(res, `/${defaultPrefix}/`, 302)
+    return
+  }
+
+  const parsed = parsePrefix(url.pathname)
+  if (!parsed) {
+    sendResponse(res, 404, "Not Found")
+    return
+  }
+
+  const { prefix, rest } = parsed
+  const projectRootDir = registeredProjects.get(prefix)
+  if (!projectRootDir) {
+    sendResponse(res, 404, "Not Found")
+    return
+  }
+  const wtParams = worktreeQueryString(url)
+
+  if (rest === "/ws") {
+    sendResponse(res, 400, "WebSocket upgrade failed")
+    return
+  }
+
+  if (rest === "/styles.css") {
+    sendResponse(res, 200, await getStylesCss(), { "content-type": "text/css; charset=utf-8" })
+    return
+  }
+
+  let rootDir: string
+  try {
+    rootDir = await resolveRootDir(projectRootDir, url)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid directory"
+    sendResponse(res, 400, message)
+    return
+  }
+
+  if (rest === "/") {
+    sendResponse(res, 200, await renderBrowserPage(prefix, rootDir, wtParams), {
+      "content-type": "text/html; charset=utf-8",
+    })
+    return
+  }
+
+  if (rest === "/api/files") {
+    const files = await collectPreviewFiles(rootDir)
+    sendJson(res, { files, directory: rootDir })
+    return
+  }
+
+  if (rest === "/api/worktrees") {
+    const worktrees = await listWorktrees(projectRootDir)
+    sendJson(res, { worktrees })
+    return
+  }
+
+  if (rest === "/api/file") {
+    const relativePath = url.searchParams.get("path")
+    if (!relativePath) {
+      sendResponse(res, 400, "Missing path query parameter")
+      return
+    }
+
+    try {
+      const absolutePath = ensureInsideRoot(rootDir, relativePath)
+      const fileStat = await stat(absolutePath)
+      if (!fileStat.isFile() || !isPreviewable(absolutePath)) {
+        sendResponse(res, 400, "File is not previewable")
+        return
+      }
+
+      const raw = await readFile(absolutePath, "utf-8")
+      sendResponse(res, 200, raw, { "content-type": contentTypeFromPath(absolutePath) })
+      return
+    } catch {
+      sendResponse(res, 400, "Invalid file path")
+      return
+    }
+  }
+
+  if (rest === "/preview") {
+    const relativePath = url.searchParams.get("file")
+    if (!relativePath) {
+      sendResponse(res, 400, "Missing file query parameter")
+      return
+    }
+
+    try {
+      const absolutePath = ensureInsideRoot(rootDir, relativePath)
+      const fileStat = await stat(absolutePath)
+      if (!fileStat.isFile()) {
+        sendResponse(res, 404, "File not found")
+        return
+      }
+
+      const extension = path.extname(absolutePath).toLowerCase()
+      const content = await readFile(absolutePath, "utf-8")
+
+      if (extension === ".md") {
+        const body = await renderMarkdownBody(content)
+        sendResponse(res, 200, wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir, true), {
+          "content-type": "text/html; charset=utf-8",
+        })
+        return
+      }
+
+      if (extension === ".drawio") {
+        const body = renderDrawioBody(content)
+        sendResponse(res, 200, wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir), {
+          "content-type": "text/html; charset=utf-8",
+        })
+        return
+      }
+
+      if (extension === ".html" || extension === ".htm") {
+        const body = renderHtmlBody(prefix, relativePath, wtParams)
+        sendResponse(res, 200, wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir), {
+          "content-type": "text/html; charset=utf-8",
+        })
+        return
+      }
+
+      if (extension === ".csv") {
+        const body = renderCsvBody(content)
+        sendResponse(res, 200, wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir), {
+          "content-type": "text/html; charset=utf-8",
+        })
+        return
+      }
+
+      const lang = getCodeLanguage(absolutePath)
+      if (lang) {
+        const body = renderCodeBody(content, lang)
+        sendResponse(res, 200, wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir), {
+          "content-type": "text/html; charset=utf-8",
+        })
+        return
+      }
+
+      sendResponse(res, 400, "Unsupported file type")
+      return
+    } catch {
+      sendResponse(res, 400, "Invalid file path")
+      return
+    }
+  }
+
+  sendResponse(res, 404, "Not Found")
+}
+
 async function ensureWatchers(dir: string): Promise<void> {
-  if (dirWatchers.has(dir)) {
-    dirWatchers.get(dir)!.refCount++
+  const existing = dirWatchers.get(dir)
+  if (existing) {
+    existing.refCount++
     return
   }
 
@@ -642,183 +845,72 @@ export async function startServer(port = Number(process.env.PREVIEW_PORT ?? "178
 
   activePort = Number.isNaN(port) ? 17890 : port
 
-  server = Bun.serve<{ rootDir: string }>({
-    hostname: "0.0.0.0",
-    port: activePort,
-    fetch: async (request, serverInstance) => {
-      const url = new URL(request.url)
-
-      // Root path → redirect to default project
-      if (url.pathname === "/") {
-        if (!defaultPrefix) {
-          return new Response("No projects registered", { status: 404 })
-        }
-        return Response.redirect(`/${defaultPrefix}/`, 302)
+  const httpServer = createServer((req, res) => {
+    void handleHttpRequest(req, res).catch((error) => {
+      console.error("Request handling failed:", error)
+      if (!res.headersSent) {
+        sendResponse(res, 500, "Internal Server Error")
+      } else {
+        res.end()
       }
+    })
+  })
+  server = httpServer
 
-      // Parse prefix from URL
+  const websocketServer = new WebSocketServer({ noServer: true })
+  wss = websocketServer
+
+  websocketServer.on("connection", (ws) => {
+    wsClients.add(ws)
+    ws.on("message", () => {})
+    ws.on("close", () => {
+      handleWebSocketClose(ws)
+    })
+  })
+
+  httpServer.on("upgrade", (req, socket, head) => {
+    void (async () => {
+      const url = parseRequestUrl(req)
       const parsed = parsePrefix(url.pathname)
-      if (!parsed) {
-        return new Response("Not Found", { status: 404 })
+      if (!parsed || parsed.rest !== "/ws") {
+        socket.destroy()
+        return
       }
 
-      const { prefix, rest } = parsed
-
-      const projectRootDir = registeredProjects.get(prefix)!
-      const wtParams = worktreeQueryString(url)
-
-      // WebSocket upgrade: /:prefix/ws
-      if (rest === "/ws") {
-        let rootDir: string
-        try {
-          rootDir = await resolveRootDir(projectRootDir, url)
-        } catch {
-          rootDir = projectRootDir
-        }
-        await ensureWatchers(rootDir)
-        const upgraded = serverInstance.upgrade(request, { data: { rootDir } })
-        if (upgraded) {
-          return undefined
-        }
-        return new Response("WebSocket upgrade failed", { status: 400 })
+      const projectRootDir = registeredProjects.get(parsed.prefix)
+      if (!projectRootDir) {
+        socket.destroy()
+        return
       }
-
-      // Static: /:prefix/styles.css
-      if (rest === "/styles.css") {
-        return new Response(await getStylesCss(), { headers: { "content-type": "text/css; charset=utf-8" } })
-      }
-
       let rootDir: string
       try {
         rootDir = await resolveRootDir(projectRootDir, url)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Invalid directory"
-        return new Response(message, { status: 400 })
+      } catch {
+        rootDir = projectRootDir
       }
 
-      // Browser page: /:prefix/
-      if (rest === "/") {
-        return new Response(await renderBrowserPage(prefix, rootDir, wtParams), {
-          headers: { "content-type": "text/html; charset=utf-8" },
-        })
-      }
+      await ensureWatchers(rootDir)
+      websocketServer.handleUpgrade(req, socket, head, (ws) => {
+        wsClientMeta.set(ws, { rootDir })
+        websocketServer.emit("connection", ws, req)
+      })
+    })().catch(() => {
+      socket.destroy()
+    })
+  })
 
-      // API: file listing: /:prefix/api/files
-      if (rest === "/api/files") {
-        const files = await collectPreviewFiles(rootDir)
-        return Response.json({ files, directory: rootDir })
-      }
-
-      // API: worktree listing: /:prefix/api/worktrees
-      if (rest === "/api/worktrees") {
-        const worktrees = await listWorktrees(projectRootDir)
-        return Response.json({ worktrees })
-      }
-
-      // API: raw file content: /:prefix/api/file
-      if (rest === "/api/file") {
-        const relativePath = url.searchParams.get("path")
-        if (!relativePath) {
-          return new Response("Missing path query parameter", { status: 400 })
-        }
-
-        try {
-          const absolutePath = ensureInsideRoot(rootDir, relativePath)
-          const fileStat = await stat(absolutePath)
-          if (!fileStat.isFile() || !isPreviewable(absolutePath)) {
-            return new Response("File is not previewable", { status: 400 })
-          }
-
-          const raw = await readFile(absolutePath, "utf-8")
-          return new Response(raw, {
-            headers: { "content-type": contentTypeFromPath(absolutePath) },
-          })
-        } catch {
-          return new Response("Invalid file path", { status: 400 })
-        }
-      }
-
-      // Preview page: /:prefix/preview
-      if (rest === "/preview") {
-        const relativePath = url.searchParams.get("file")
-        if (!relativePath) {
-          return new Response("Missing file query parameter", { status: 400 })
-        }
-
-        try {
-          const absolutePath = ensureInsideRoot(rootDir, relativePath)
-          const fileStat = await stat(absolutePath)
-          if (!fileStat.isFile()) {
-            return new Response("File not found", { status: 404 })
-          }
-
-          const extension = path.extname(absolutePath).toLowerCase()
-          const content = await readFile(absolutePath, "utf-8")
-
-          if (extension === ".md") {
-            const body = await renderMarkdownBody(content)
-            return new Response(wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir, true), {
-              headers: { "content-type": "text/html; charset=utf-8" },
-            })
-          }
-
-          if (extension === ".drawio") {
-            const body = renderDrawioBody(content)
-            return new Response(wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir), {
-              headers: { "content-type": "text/html; charset=utf-8" },
-            })
-          }
-
-          if (extension === ".html" || extension === ".htm") {
-            const body = renderHtmlBody(prefix, relativePath, wtParams)
-            return new Response(wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir), {
-              headers: { "content-type": "text/html; charset=utf-8" },
-            })
-          }
-
-          if (extension === ".csv") {
-            const body = renderCsvBody(content)
-            return new Response(wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir), {
-              headers: { "content-type": "text/html; charset=utf-8" },
-            })
-          }
-
-          const lang = getCodeLanguage(absolutePath)
-          if (lang) {
-            const body = renderCodeBody(content, lang)
-            return new Response(wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir), {
-              headers: { "content-type": "text/html; charset=utf-8" },
-            })
-          }
-
-          return new Response("Unsupported file type", { status: 400 })
-        } catch {
-          return new Response("Invalid file path", { status: 400 })
-        }
-      }
-
-      return new Response("Not Found", { status: 404 })
-    },
-    websocket: {
-      async open(ws) {
-        wsClients.add(ws)
-        await ensureWatchers(ws.data.rootDir)
-      },
-      message() {},
-      close(ws) {
-        wsClients.delete(ws)
-        const dir = ws.data.rootDir
-        const entry = dirWatchers.get(dir)
-        // Only decrement refCount for non-primary project dirs (worktree dirs)
-        const isPrimaryDir = [...registeredProjects.values()].includes(dir)
-        if (entry && !isPrimaryDir) {
-          entry.refCount--
-          if (entry.refCount <= 0) {
-            closeWatchersForDir(dir)
-          }
-        }
-      },
-    },
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      httpServer.off("listening", onListening)
+      reject(error)
+    }
+    const onListening = () => {
+      httpServer.off("error", onError)
+      resolve()
+    }
+    httpServer.once("error", onError)
+    httpServer.once("listening", onListening)
+    httpServer.listen(activePort, "0.0.0.0")
   })
 
   return activePort
@@ -836,7 +928,9 @@ export function stopServer(): void {
   registeredProjects.clear()
   defaultPrefix = ""
   activePort = 0
-  server.stop(true)
+  wss?.close()
+  wss = null
+  server.close()
   server = null
 }
 
