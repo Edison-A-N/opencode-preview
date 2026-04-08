@@ -230,12 +230,26 @@ function createSidebarScript(prefix: string, currentFile: string, worktreeParams
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;").replaceAll("\\"", "&quot;");
 
-  const iconFor = (f) => {
-    if (f.endsWith(".drawio")) return "📊";
-    if (f.endsWith(".md")) return "📄";
-    if (f.endsWith(".html") || f.endsWith(".htm")) return "🌐";
-    if (f.endsWith(".csv")) return "📋";
-    return "💻";
+  const iconFor = (file) => {
+    let color = "#519aba";
+    let text = "";
+    const f = file.toLowerCase();
+    if (f.endsWith(".ts")) { color = "#3178c6"; text = "TS"; }
+    else if (f.endsWith(".tsx")) { color = "#3178c6"; text = "TX"; }
+    else if (f.endsWith(".js") || f.endsWith(".cjs") || f.endsWith(".mjs")) { color = "#f1e05a"; text = "JS"; }
+    else if (f.endsWith(".jsx")) { color = "#f1e05a"; text = "JX"; }
+    else if (f.endsWith(".html") || f.endsWith(".htm")) { color = "#e34f26"; text = "<>"; }
+    else if (f.endsWith(".css")) { color = "#1572b6"; text = "#"; }
+    else if (f.endsWith(".json")) { color = "#cbcb41"; text = "{}"; }
+    else if (f.endsWith(".md")) { color = "#42a5f5"; text = "M↓"; }
+    else if (f.endsWith(".py")) { color = "#3572A5"; text = "PY"; }
+    else if (f.endsWith(".go")) { color = "#00ADD8"; text = "GO"; }
+    else if (f.endsWith(".rs")) { color = "#dea584"; text = "RS"; }
+    else if (f.endsWith(".drawio")) { color = "#f08705"; text = "D"; }
+    else if (f.endsWith(".csv")) { color = "#217346"; text = "CSV"; }
+    else { text = f.split('.').pop().substring(0, 2).toUpperCase() || "F"; }
+
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16"><path fill="' + color + '" d="M13.85 4.44l-3.28-3.3c-.19-.18-.43-.28-.71-.28H3.5c-.55 0-1 .45-1 1v12.28c0 .55.45 1 1 1h9c.55 0 1-.45 1-1V5.14c0-.26-.1-.51-.28-.7zM9.5 2.56L12.06 5H9.5V2.56zM12.5 14h-9V2.5h5V5.5h3.5v8.5z"/><text x="8" y="11" font-size="5" font-family="sans-serif" font-weight="bold" fill="' + color + '" text-anchor="middle">' + text + '</text></svg>';
   };
 
   function buildHref(file) {
@@ -268,7 +282,7 @@ function createSidebarScript(prefix: string, currentFile: string, worktreeParams
       }
       const hasActive = JSON.stringify(value).includes(JSON.stringify(currentFile).slice(1,-1));
       const open = hasActive ? " open" : "";
-      return '<li class="folder-item"><details' + open + '><summary>📁 ' + escapeHtml(name) + '</summary>' + renderTree(value) + '</details></li>';
+      return '<li class="folder-item"><details' + open + '><summary>' + escapeHtml(name) + '</summary>' + renderTree(value) + '</details></li>';
     }).join("") + '</ul>';
   }
 
