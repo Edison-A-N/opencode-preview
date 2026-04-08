@@ -354,7 +354,60 @@ function escapeHtml(text: string): string {
   })
 }
 
-function wrapWithSidebar(prefix: string, title: string, innerBody: string, currentFile: string, worktreeParams: string, rootDir: string): string {
+function createTocScript(): string {
+  return `<script>
+(() => {
+  const container = document.querySelector(".preview-main") || document.querySelector(".preview-content");
+  if (!container) return;
+  const headings = container.querySelectorAll("h1, h2, h3");
+  const tocNav = document.getElementById("toc-nav");
+  if (!tocNav || !headings.length) { if (tocNav) tocNav.remove(); return; }
+  const list = tocNav.querySelector("ul");
+  headings.forEach((h, i) => {
+    if (!h.id) h.id = "toc-id-" + i;
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = "#" + h.id;
+    a.textContent = h.textContent;
+    a.className = "toc-" + h.tagName.toLowerCase();
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      document.getElementById(h.id).scrollIntoView({ behavior: "smooth" });
+    });
+    li.appendChild(a);
+    list.appendChild(li);
+  });
+  const links = list.querySelectorAll("a");
+  const scrollParent = document.querySelector(".preview-main") || document.querySelector(".preview-content");
+  let ticking = false;
+  function updateActive() {
+    const scrollTop = scrollParent.scrollTop;
+    let current = null;
+    for (const h of headings) {
+      if (h.offsetTop - 80 <= scrollTop) current = h;
+    }
+    if (current) {
+      links.forEach(l => l.classList.remove("active"));
+      const active = list.querySelector('a[href="#' + current.id + '"]');
+      if (active) { active.classList.add("active"); active.scrollIntoView({ block: "nearest", behavior: "instant" }); }
+    }
+    ticking = false;
+  }
+  scrollParent.addEventListener("scroll", () => { if (!ticking) { ticking = true; requestAnimationFrame(updateActive); } });
+  if (links.length) links[0].classList.add("active");
+})();
+</script>`
+}
+
+function wrapWithSidebar(prefix: string, title: string, innerBody: string, currentFile: string, worktreeParams: string, rootDir: string, hasToc = false): string {
+  const tocHtml = hasToc
+    ? `<nav id="toc-nav" class="toc-nav"><div class="toc-heading">On This Page</div><ul></ul></nav>`
+    : ""
+  const contentClass = hasToc ? "preview-content preview-content-with-toc" : "preview-content"
+  const bodyWrapper = hasToc
+    ? `<div class="preview-main">\n        <div class="dir-indicator"><code>${escapeHtml(rootDir)}</code></div>\n        ${innerBody}\n      </div>\n      ${tocHtml}`
+    : `<div class="dir-indicator"><code>${escapeHtml(rootDir)}</code></div>\n        ${innerBody}`
+  const tocScript = hasToc ? createTocScript() : ""
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -368,14 +421,14 @@ function wrapWithSidebar(prefix: string, title: string, innerBody: string, curre
   <body>
     <div class="preview-layout">
       <nav id="preview-sidebar" class="preview-sidebar"></nav>
-      <div class="preview-content">
-        <div class="dir-indicator"><code>${escapeHtml(rootDir)}</code></div>
-        ${innerBody}
+      <div class="${contentClass}">
+        ${bodyWrapper}
       </div>
     </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
     <script>document.querySelectorAll("pre code").forEach(b => window.hljs?.highlightElement(b));</script>
     ${createSidebarScript(prefix, currentFile, worktreeParams)}
+    ${tocScript}
     ${createLiveReloadScript(prefix, worktreeParams)}
   </body>
 </html>`
@@ -646,7 +699,7 @@ export async function startServer(port = Number(process.env.PREVIEW_PORT ?? "178
 
           if (extension === ".md") {
             const body = await renderMarkdownBody(content)
-            return new Response(wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir), {
+            return new Response(wrapWithSidebar(prefix, relativePath, body, relativePath, wtParams, rootDir, true), {
               headers: { "content-type": "text/html; charset=utf-8" },
             })
           }
