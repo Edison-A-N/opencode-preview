@@ -1,6 +1,6 @@
 import { tool, type Plugin, type PluginModule } from "@opencode-ai/plugin"
 
-import { isPreviewable, registerProject, startServer } from "./server"
+import { isPreviewable, startServer } from "./server"
 
 const DEFAULT_PORT = Number(process.env.PREVIEW_PORT ?? "17890")
 
@@ -27,27 +27,26 @@ async function openInBrowser($: PluginContext["$"] | undefined, url: string): Pr
 
 type PluginContext = Parameters<Plugin>[0]
 
-export const server: Plugin = async ({ directory, client, $, worktree }) => {
-  const projectDirectory = worktree || directory
+export const server: Plugin = async ({ project, client, $, serverUrl }) => {
+  const projectId = project.id
 
   // Defer server startup to background so plugin init returns immediately
   // and does not block opencode startup. The ready promise is awaited lazily
   // when the preview tool is first invoked.
   const ready = (async () => {
-    const port = await startServer(DEFAULT_PORT)
-    const prefix = await registerProject(projectDirectory)
+    const port = await startServer(DEFAULT_PORT, serverUrl.toString().replace(/\/$/, ""))
     const baseUrl = `http://localhost:${port}`
 
     client.app.log({
       body: {
         service: "opencode-preview",
         level: "info",
-        message: `Preview server started at ${baseUrl}/${prefix}/`,
-        extra: { directory: projectDirectory, port, prefix },
+        message: `Preview server started at ${baseUrl}/browse?project=${projectId}`,
+        extra: { projectId, port },
       },
     })
 
-    return { port, prefix, baseUrl }
+    return { port, baseUrl }
   })()
 
   return {
@@ -59,11 +58,11 @@ export const server: Plugin = async ({ directory, client, $, worktree }) => {
           worktree: tool.schema.string().optional().describe("Git worktree name to preview from (resolves via .git/worktrees/)"),
         },
         async execute(args) {
-          const { baseUrl, prefix } = await ready
+          const { baseUrl } = await ready
           const file = args.file.trim()
-          const params = new URLSearchParams({ file })
+          const params = new URLSearchParams({ project: projectId, file })
           if (args.worktree) params.set("worktree", args.worktree)
-          const url = `${baseUrl}/${prefix}/preview?${params.toString()}`
+          const url = `${baseUrl}/preview?${params.toString()}`
           await openInBrowser($, url)
           return `Preview URL: ${url}`
         },

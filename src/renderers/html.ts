@@ -1,5 +1,5 @@
-export function renderHtmlBody(prefix: string, relativePath: string, worktreeParams: string): string {
-  const apiPath = `/${prefix}/api/file?path=${encodeURIComponent(relativePath)}`
+export function renderHtmlBody(projectId: string, relativePath: string, worktreeParams: string): string {
+  const apiPath = `/api/file?project=${encodeURIComponent(projectId)}&path=${encodeURIComponent(relativePath)}`
   const iframeSrc = worktreeParams ? `${apiPath}&${worktreeParams}` : apiPath
 
   return `<main class="html-preview-body">

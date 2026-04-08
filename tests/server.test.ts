@@ -116,26 +116,26 @@ describe("renderCodeBody", () => {
 
 describe("renderHtmlBody", () => {
   test("renders iframe with correct src", () => {
-    const result = renderHtmlBody("my-project", "pages/index.html", "")
+    const result = renderHtmlBody("my-project-id", "pages/index.html", "")
     expect(result).toContain('class="html-preview-body"')
     expect(result).toContain("<iframe")
-    expect(result).toContain("/my-project/api/file?path=pages%2Findex.html")
+    expect(result).toContain("/api/file?project=my-project-id&path=pages%2Findex.html")
     expect(result).toContain("sandbox=")
   })
 
   test("includes worktree params in iframe src", () => {
-    const result = renderHtmlBody("proj", "page.html", "worktree=feature-branch")
-    expect(result).toContain("/proj/api/file?path=page.html&worktree=feature-branch")
+    const result = renderHtmlBody("proj-id", "page.html", "worktree=feature-branch")
+    expect(result).toContain("/api/file?project=proj-id&path=page.html&worktree=feature-branch")
   })
 
   test("includes open in new tab link", () => {
-    const result = renderHtmlBody("proj", "page.html", "")
+    const result = renderHtmlBody("proj-id", "page.html", "")
     expect(result).toContain("Open in new tab")
     expect(result).toContain("target=\"_blank\"")
   })
 
   test("shows HTML Preview badge", () => {
-    const result = renderHtmlBody("proj", "page.html", "")
+    const result = renderHtmlBody("proj-id", "page.html", "")
     expect(result).toContain("HTML Preview")
     expect(result).toContain('class="html-badge"')
   })

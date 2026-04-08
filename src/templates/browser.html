@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Preview Browser</title>
-    <link rel="stylesheet" href="/{{PREFIX}}/styles.css" />
+    <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <main class="browser-shell">
@@ -30,7 +30,7 @@
       const fileList = document.getElementById("file-list");
       const refreshButton = document.getElementById("refresh");
       const worktreePanel = document.getElementById("worktree-panel");
-      const prefix = "{{PREFIX}}";
+      const projectId = "{{PROJECT_ID}}";
       let worktreeParams = "{{WORKTREE_PARAMS}}";
 
       const escapeHtml = (value) => value
@@ -66,7 +66,7 @@
       };
 
       function buildHref(file) {
-        let href = "/" + prefix + "/preview?file=" + encodeURIComponent(file);
+        let href = "/preview?project=" + encodeURIComponent(projectId) + "&file=" + encodeURIComponent(file);
         if (worktreeParams) href += "&" + worktreeParams;
         return href;
       }
@@ -97,14 +97,14 @@
             const href = buildHref(value);
             return `<li class=\"file-item\"><a href=\"${href}\"><span class=\"file-icon\">${iconFor(value)}</span><span class=\"file-path\">${escapeHtml(name)}</span></a></li>`;
           }
-          return `<li class=\"folder-item\"><details open><summary>${escapeHtml(name)}</summary>${renderTree(value)}</details></li>`;
+          return `<li class=\"folder-item\"><details><summary>${escapeHtml(name)}</summary>${renderTree(value)}</details></li>`;
         }).join("")}</ul>`;
       }
 
       async function loadFiles() {
         fileList.innerHTML = "<li class=\"file-empty\">Loading...</li>";
-        let apiUrl = "/" + prefix + "/api/files";
-        if (worktreeParams) apiUrl += "?" + worktreeParams;
+        let apiUrl = "/api/files?project=" + encodeURIComponent(projectId);
+        if (worktreeParams) apiUrl += "&" + worktreeParams;
         const response = await fetch(apiUrl);
         if (!response.ok) {
           fileList.innerHTML = "<li class=\"file-empty\">Failed to load files.</li>";
@@ -201,7 +201,7 @@
 
       async function loadWorktrees() {
         try {
-          const resp = await fetch("/" + prefix + "/api/worktrees");
+          const resp = await fetch("/api/worktrees?project=" + encodeURIComponent(projectId));
           const data = await resp.json();
           const worktrees = Array.isArray(data.worktrees) ? data.worktrees : [];
           if (worktrees.length === 0) return;

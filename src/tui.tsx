@@ -1,7 +1,6 @@
 import type { TuiPlugin, TuiPluginModule, TuiSlotPlugin } from "@opencode-ai/plugin/tui"
 import { spawn } from "node:child_process"
-import path from "node:path"
-import { isPreviewable as serverIsPreviewable, registerProject } from "./server"
+import { isPreviewable as serverIsPreviewable } from "./server"
 
 const DEFAULT_PORT = Number(process.env.PREVIEW_PORT ?? "17890")
 
@@ -22,60 +21,51 @@ function isPreviewable(file: string): boolean {
 
 function getWorktreeName(worktreePath: string, directory: string): string | undefined {
   if (!worktreePath || worktreePath === directory) return undefined
+  const path = require("node:path")
   return path.basename(worktreePath)
 }
 
-function buildUrl(baseUrl: string, prefix: string, pathname: string, params: Record<string, string | undefined>): string {
+function buildUrl(baseUrl: string, projectId: string, pathname: string, params: Record<string, string | undefined>): string {
   const qs = new URLSearchParams()
+  qs.set("project", projectId)
   for (const [k, v] of Object.entries(params)) {
     if (v) qs.set(k, v)
   }
   const query = qs.toString()
-  const prefixedPath = `/${prefix}${pathname}`
-  return query ? `${baseUrl}${prefixedPath}?${query}` : `${baseUrl}${prefixedPath}`
+  return query ? `${baseUrl}${pathname}?${query}` : `${baseUrl}${pathname}`
 }
 
-function previewUrl(baseUrl: string, prefix: string, file: string, worktree?: string): string {
-  return buildUrl(baseUrl, prefix, "/preview", { file, worktree })
+function previewUrl(baseUrl: string, projectId: string, file: string, worktree?: string): string {
+  return buildUrl(baseUrl, projectId, "/preview", { file, worktree })
 }
 
-function browserUrl(baseUrl: string, prefix: string, worktree?: string): string {
-  return buildUrl(baseUrl, prefix, "/", { worktree })
+function browserUrl(baseUrl: string, projectId: string, worktree?: string): string {
+  return buildUrl(baseUrl, projectId, "/browse", { worktree })
 }
 
 export const tui: TuiPlugin = async (api) => {
   const baseUrl = `http://localhost:${DEFAULT_PORT}`
   const directory = api.state.path.directory
-  const prefixPromise = registerProject(directory)
   const worktree = getWorktreeName(api.state.path.worktree, directory)
 
-  let resolvedPrefix: string | undefined
-
-  async function getPrefix(): Promise<string> {
-    if (resolvedPrefix === undefined) {
-      resolvedPrefix = await prefixPromise
-    }
-    return resolvedPrefix
-  }
+  const projectId = (api.state as any).project?.id ?? ""
 
   api.command.register(() => {
-    const prefix = resolvedPrefix ?? directory.split("/").pop() ?? "project"
     const route = api.route.current
-    if (route.name !== "session") return [openBrowserCommand(baseUrl, prefix, api, worktree, getPrefix)]
+    if (route.name !== "session") return [openBrowserCommand(baseUrl, projectId, api, worktree)]
 
     const files = api.state.session.diff(route.params.sessionID)
     const previewable = files.filter((f) => isPreviewable(f.file))
 
     return [
-      openBrowserCommand(baseUrl, prefix, api, worktree, getPrefix),
+      openBrowserCommand(baseUrl, projectId, api, worktree),
       ...previewable.map((f) => ({
         title: `Preview: ${f.file}`,
         value: `preview:file:${f.file}`,
         description: `Open ${f.file} in browser preview`,
         category: "Preview",
         async onSelect() {
-          const p = await getPrefix()
-          const url = previewUrl(baseUrl, p, f.file, worktree)
+          const url = previewUrl(baseUrl, projectId, f.file, worktree)
           openUrl(url)
           api.ui.toast({ variant: "info", message: `Preview: ${f.file}`, duration: 2000 })
         },
@@ -86,7 +76,6 @@ export const tui: TuiPlugin = async (api) => {
   const slotPlugin: TuiSlotPlugin = {
     slots: {
       sidebar_content(_ctx, props) {
-        const prefix = resolvedPrefix ?? directory.split("/").pop() ?? "project"
         const files = api.state.session.diff(props.session_id)
         const previewable = files.filter((f) => isPreviewable(f.file))
 
@@ -97,13 +86,13 @@ export const tui: TuiPlugin = async (api) => {
             </text>
             <box flexDirection="row" gap={1}>
               <text dimColor>{worktree ? "🌿" : "📂"}</text>
-              <a href={browserUrl(baseUrl, prefix, worktree)} color="cyan">
+              <a href={browserUrl(baseUrl, projectId, worktree)} color="cyan">
                 {worktree ?? "Browse Files"}
               </a>
             </box>
             {previewable.map((f) => {
               const icon = f.file.endsWith(".drawio") ? "📊" : "📄"
-              const url = previewUrl(baseUrl, prefix, f.file, worktree)
+              const url = previewUrl(baseUrl, projectId, f.file, worktree)
               return (
                 <box flexDirection="row" gap={1}>
                   <text dimColor>{icon}</text>
@@ -124,12 +113,11 @@ export const tui: TuiPlugin = async (api) => {
 
 function openBrowserCommand(
   baseUrl: string,
-  prefix: string,
+  projectId: string,
   api: Parameters<TuiPlugin>[0],
   worktree?: string,
-  getPrefix?: () => Promise<string>,
 ) {
-  const url = browserUrl(baseUrl, prefix, worktree)
+  const url = browserUrl(baseUrl, projectId, worktree)
   const label = worktree ? `Open Preview (${worktree})` : "Open Preview"
   return {
     title: label,
@@ -137,10 +125,8 @@ function openBrowserCommand(
     description: "Open the preview file browser in your default browser",
     category: "Preview",
     async onSelect() {
-      const p = getPrefix ? await getPrefix() : prefix
-      const resolvedUrl = browserUrl(baseUrl, p, worktree)
-      openUrl(resolvedUrl)
-      api.ui.toast({ variant: "info", message: `Opened ${resolvedUrl}`, duration: 3000 })
+      openUrl(url)
+      api.ui.toast({ variant: "info", message: `Opened ${url}`, duration: 3000 })
     },
   }
 }
