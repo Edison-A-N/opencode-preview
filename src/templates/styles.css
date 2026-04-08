@@ -75,6 +75,71 @@ a:hover {
   padding: 1rem;
 }
 
+.worktree-panel {
+  margin-top: 1.5rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1rem;
+}
+
+.worktree-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.worktree-radio {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.88rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.worktree-radio:hover {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+}
+
+.worktree-radio:has(input:checked) {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.worktree-radio input[type="radio"] {
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.worktree-label {
+  user-select: none;
+}
+
+.sidebar-worktree-section {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.sidebar-worktree-section .worktree-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0 0.5rem;
+}
+
+.sidebar-worktree-section .worktree-radio {
+  font-size: 0.82rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+}
+
 .panel-title-row {
   display: flex;
   justify-content: space-between;

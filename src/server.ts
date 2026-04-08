@@ -130,21 +130,34 @@ async function collectPreviewFiles(directory: string, base = directory): Promise
   return files.flat().sort((a, b) => a.localeCompare(b))
 }
 
-async function resolveWorktreePath(baseDir: string, worktreeName: string): Promise<string> {
+async function findGitDir(baseDir: string): Promise<string> {
   const gitPath = path.join(baseDir, ".git")
-  let gitDir: string
+  const gitStat = await stat(gitPath)
+  if (gitStat.isDirectory()) {
+    return gitPath
+  }
+  const content = await readFile(gitPath, "utf-8")
+  const match = content.trim().match(/^gitdir:\s*(.+)$/)
+  if (!match) throw new Error("Invalid .git file format")
+  const linkedGitDir = path.resolve(baseDir, match[1])
+  return path.resolve(linkedGitDir, "..", "..")
+}
 
+async function listWorktrees(baseDir: string): Promise<string[]> {
   try {
-    const gitStat = await stat(gitPath)
-    if (gitStat.isDirectory()) {
-      gitDir = gitPath
-    } else {
-      const content = await readFile(gitPath, "utf-8")
-      const match = content.trim().match(/^gitdir:\s*(.+)$/)
-      if (!match) throw new Error("Invalid .git file format")
-      const linkedGitDir = path.resolve(baseDir, match[1])
-      gitDir = path.resolve(linkedGitDir, "..", "..")
-    }
+    const gitDir = await findGitDir(baseDir)
+    const worktreesDir = path.join(gitDir, "worktrees")
+    const entries = await readdir(worktreesDir, { withFileTypes: true })
+    return entries.filter((e) => e.isDirectory()).map((e) => e.name).sort()
+  } catch {
+    return []
+  }
+}
+
+async function resolveWorktreePath(baseDir: string, worktreeName: string): Promise<string> {
+  let gitDir: string
+  try {
+    gitDir = await findGitDir(baseDir)
   } catch {
     throw new Error(`Cannot find .git in ${baseDir}`)
   }
@@ -267,15 +280,51 @@ function createSidebarScript(prefix: string, currentFile: string, worktreeParams
       const resp = await fetch(apiUrl);
       const data = await resp.json();
       const files = Array.isArray(data.files) ? data.files : [];
+
+      let worktreeHtml = "";
+      try {
+        const wtResp = await fetch("/" + prefix + "/api/worktrees");
+        const wtData = await wtResp.json();
+        const worktrees = Array.isArray(wtData.worktrees) ? wtData.worktrees : [];
+        if (worktrees.length > 0) {
+          const params = new URLSearchParams(worktreeParams);
+          const activeWt = params.get("worktree") || "";
+          worktreeHtml = '<div class="sidebar-worktree-section"><div class="sidebar-header"><h2>Worktree</h2></div><div class="worktree-options">';
+          worktreeHtml += '<label class="worktree-radio"><input type="radio" name="sidebar-worktree" value=""' + (activeWt === "" ? " checked" : "") + '><span class="worktree-label">Main repo</span></label>';
+          for (const wt of worktrees) {
+            const checked = activeWt === wt ? " checked" : "";
+            worktreeHtml += '<label class="worktree-radio"><input type="radio" name="sidebar-worktree" value="' + escapeHtml(wt) + '"' + checked + '><span class="worktree-label">' + escapeHtml(wt) + '</span></label>';
+          }
+          worktreeHtml += '</div></div>';
+        }
+      } catch {}
+
       if (files.length === 0) {
-        sidebar.innerHTML = '<div class="sidebar-loading">No files found.</div>';
+        sidebar.innerHTML = worktreeHtml + '<div class="sidebar-loading">No files found.</div>';
+        attachWorktreeHandler();
         return;
       }
-      sidebar.innerHTML = '<div class="sidebar-header"><h2>Files</h2></div>' + renderTree(buildTree(files));
+      sidebar.innerHTML = worktreeHtml + '<div class="sidebar-header"><h2>Files</h2></div>' + renderTree(buildTree(files));
+      attachWorktreeHandler();
       const active = sidebar.querySelector("a.active");
       if (active) active.scrollIntoView({ block: "center", behavior: "instant" });
     } catch {
       sidebar.innerHTML = '<div class="sidebar-loading">Failed to load.</div>';
+    }
+  }
+
+  function attachWorktreeHandler() {
+    const radios = sidebar.querySelectorAll('input[name="sidebar-worktree"]');
+    for (const r of radios) {
+      r.addEventListener("change", (e) => {
+        const url = new URL(window.location);
+        if (e.target.value) {
+          url.searchParams.set("worktree", e.target.value);
+        } else {
+          url.searchParams.delete("worktree");
+        }
+        window.location.href = url.toString();
+      });
     }
   }
 
@@ -533,6 +582,12 @@ export async function startServer(port = Number(process.env.PREVIEW_PORT ?? "178
       if (rest === "/api/files") {
         const files = await collectPreviewFiles(rootDir)
         return Response.json({ files, directory: rootDir })
+      }
+
+      // API: worktree listing: /:prefix/api/worktrees
+      if (rest === "/api/worktrees") {
+        const worktrees = await listWorktrees(projectRootDir)
+        return Response.json({ worktrees })
       }
 
       // API: raw file content: /:prefix/api/file
