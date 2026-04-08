@@ -303,13 +303,7 @@ function createSidebarScript(prefix: string, currentFile: string, worktreeParams
         if (worktrees.length > 0) {
           const params = new URLSearchParams(worktreeParams);
           const activeWt = params.get("worktree") || "";
-          worktreeHtml = '<div class="sidebar-worktree-section"><div class="sidebar-header"><h2>Worktree</h2></div><div class="worktree-options">';
-          worktreeHtml += '<label class="worktree-radio"><input type="radio" name="sidebar-worktree" value=""' + (activeWt === "" ? " checked" : "") + '><span class="worktree-label">Main repo</span></label>';
-          for (const wt of worktrees) {
-            const checked = activeWt === wt ? " checked" : "";
-            worktreeHtml += '<label class="worktree-radio"><input type="radio" name="sidebar-worktree" value="' + escapeHtml(wt) + '"' + checked + '><span class="worktree-label">' + escapeHtml(wt) + '</span></label>';
-          }
-          worktreeHtml += '</div></div>';
+          worktreeHtml = '<div class="wt-switcher" id="sidebar-wt-switcher" data-active="' + escapeHtml(activeWt) + '" data-worktrees="' + escapeHtml(JSON.stringify(worktrees)) + '"></div>';
         }
       } catch {}
 
@@ -328,18 +322,59 @@ function createSidebarScript(prefix: string, currentFile: string, worktreeParams
   }
 
   function attachWorktreeHandler() {
-    const radios = sidebar.querySelectorAll('input[name="sidebar-worktree"]');
-    for (const r of radios) {
-      r.addEventListener("change", (e) => {
+    const container = document.getElementById("sidebar-wt-switcher");
+    if (!container) return;
+    const activeWt = container.getAttribute("data-active") || "";
+    const worktrees = JSON.parse(container.getAttribute("data-worktrees") || "[]");
+
+    const branchSvg = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 6.5v3M11 6.5C11 8 9.5 9.5 5 9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="5" cy="5" r="1.5" stroke="currentColor" stroke-width="1.3"/><circle cx="5" cy="11" r="1.5" stroke="currentColor" stroke-width="1.3"/><circle cx="11" cy="5" r="1.5" stroke="currentColor" stroke-width="1.3"/></svg>';
+    const chevronSvg = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    const checkSvg = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3.5 7L6 9.5L10.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+    const allOptions = [{ value: "", label: "main" }];
+    for (const wt of worktrees) allOptions.push({ value: wt, label: wt });
+    const current = allOptions.find(function(o) { return o.value === activeWt; }) || allOptions[0];
+
+    const trigger = document.createElement("button");
+    trigger.className = "wt-trigger";
+    trigger.type = "button";
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.innerHTML = '<span class="wt-trigger-icon">' + branchSvg + '</span><span class="wt-trigger-name">' + escapeHtml(current.label) + '</span><span class="wt-trigger-chevron">' + chevronSvg + '</span>';
+
+    const dropdown = document.createElement("div");
+    dropdown.className = "wt-dropdown";
+    dropdown.setAttribute("data-open", "false");
+
+    for (const opt of allOptions) {
+      const btn = document.createElement("button");
+      btn.className = "wt-option";
+      btn.type = "button";
+      btn.setAttribute("data-active", opt.value === activeWt ? "true" : "false");
+      const badge = opt.value === "" ? '<span class="wt-option-badge">default</span>' : "";
+      btn.innerHTML = '<span class="wt-option-check">' + checkSvg + '</span><span class="wt-option-label">' + escapeHtml(opt.label) + '</span>' + badge;
+      btn.addEventListener("click", function() {
         const url = new URL(window.location);
-        if (e.target.value) {
-          url.searchParams.set("worktree", e.target.value);
-        } else {
-          url.searchParams.delete("worktree");
-        }
+        if (opt.value) { url.searchParams.set("worktree", opt.value); }
+        else { url.searchParams.delete("worktree"); }
         window.location.href = url.toString();
       });
+      dropdown.appendChild(btn);
     }
+
+    trigger.addEventListener("click", function(e) {
+      e.stopPropagation();
+      const open = dropdown.getAttribute("data-open") === "true";
+      dropdown.setAttribute("data-open", open ? "false" : "true");
+      trigger.setAttribute("aria-expanded", open ? "false" : "true");
+    });
+
+    document.addEventListener("click", function() {
+      dropdown.setAttribute("data-open", "false");
+      trigger.setAttribute("aria-expanded", "false");
+    });
+
+    container.appendChild(trigger);
+    container.appendChild(dropdown);
   }
 
   loadSidebar();
