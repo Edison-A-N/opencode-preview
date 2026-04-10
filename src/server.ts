@@ -212,12 +212,36 @@ async function findGitDir(baseDir: string): Promise<string> {
   return path.resolve(linkedGitDir, "..", "..")
 }
 
-async function listWorktrees(baseDir: string): Promise<string[]> {
+interface WorktreeInfo {
+  name: string
+  branch: string
+}
+
+async function getWorktreeBranch(gitDir: string, worktreeName: string): Promise<string> {
+  try {
+    const headPath = path.join(gitDir, "worktrees", worktreeName, "HEAD")
+    const headContent = (await readFile(headPath, "utf-8")).trim()
+    const refMatch = headContent.match(/^ref:\s*refs\/heads\/(.+)$/)
+    if (refMatch) return refMatch[1]
+    // Detached HEAD — show short hash
+    return headContent.slice(0, 8)
+  } catch {
+    return "unknown"
+  }
+}
+
+async function listWorktrees(baseDir: string): Promise<WorktreeInfo[]> {
   try {
     const gitDir = await findGitDir(baseDir)
     const worktreesDir = path.join(gitDir, "worktrees")
     const entries = await readdir(worktreesDir, { withFileTypes: true })
-    return entries.filter((e) => e.isDirectory()).map((e) => e.name).sort()
+    const dirs = entries.filter((e) => e.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))
+    return Promise.all(
+      dirs.map(async (e) => ({
+        name: e.name,
+        branch: await getWorktreeBranch(gitDir, e.name),
+      })),
+    )
   } catch {
     return []
   }
@@ -483,7 +507,10 @@ function createSidebarScript(projectId: string, currentFile: string, worktreePar
     const checkSvg = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3.5 7L6 9.5L10.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
     const allOptions = [{ value: "", label: "main" }];
-    for (const wt of worktrees) allOptions.push({ value: wt, label: wt });
+    for (const wt of worktrees) {
+      const label = (typeof wt === "object" && wt.branch) ? wt.name + " (" + wt.branch + ")" : (wt.name || wt);
+      allOptions.push({ value: wt.name || wt, label: label });
+    }
     const current = allOptions.find(function(o) { return o.value === activeWt; }) || allOptions[0];
 
     const trigger = document.createElement("button");
