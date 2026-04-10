@@ -243,6 +243,64 @@ a:hover {
   margin: 0.5rem;
 }
 
+/* Copy path button */
+.copy-path-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  cursor: default;
+}
+
+.copy-path-project {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.copy-path-project svg {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.copy-path-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.copy-path-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.copy-path-btn:hover {
+  border-color: var(--border);
+  background: var(--list-hover);
+  color: var(--text);
+}
+
+.copy-path-row.copied .copy-path-btn {
+  color: #2ea043;
+}
+
 /* Browser page panel wrapper */
 .worktree-panel {
   padding: 0;
@@ -364,11 +422,49 @@ button:hover {
   padding: 0 0.5rem 0 1.9rem;
   color: var(--text);
   border: 1px solid transparent;
+  position: relative;
 }
 
 .file-item a.active {
   background-color: var(--list-active);
   color: var(--text);
+}
+
+/* --- Custom instant tooltip for file paths --- */
+
+.file-link[data-tooltip] {
+  position: relative;
+}
+
+.file-link[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 100;
+  transition: opacity 0.1s;
+}
+
+@media (prefers-color-scheme: dark) {
+  .file-link[data-tooltip]::after {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
+  }
+}
+
+.file-link[data-tooltip]:hover::after {
+  opacity: 1;
 }
 
 .file-icon {
@@ -405,13 +501,33 @@ button:hover {
 
 .preview-sidebar {
   width: 280px;
-  min-width: 200px;
-  max-width: 400px;
+  min-width: 160px;
+  max-width: 50vw;
   height: 100vh;
   overflow-y: auto;
   border-right: 1px solid var(--border);
   background: var(--card);
   flex-shrink: 0;
+}
+
+.sidebar-resize-handle {
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle.dragging {
+  background: var(--primary);
+  opacity: 0.4;
+}
+
+.sidebar-resize-handle.dragging {
+  opacity: 0.6;
 }
 
 .sidebar-header {

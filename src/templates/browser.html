@@ -90,15 +90,49 @@
         return root;
       }
 
-      function renderTree(node) {
+      const FOLDER_STATE_KEY = "browser-folder-state:" + projectId + ":" + worktreeParams;
+
+      function getSavedFolderState() {
+        try {
+          const raw = localStorage.getItem(FOLDER_STATE_KEY);
+          return raw ? JSON.parse(raw) : null;
+        } catch { return null; }
+      }
+
+      function saveFolderState() {
+        const open = [];
+        fileList.querySelectorAll("details").forEach((d) => {
+          if (d.open) open.push(d.getAttribute("data-folder-path"));
+        });
+        try { localStorage.setItem(FOLDER_STATE_KEY, JSON.stringify(open)); } catch {}
+      }
+
+      function renderTree(node, parentPath) {
+        parentPath = parentPath || "";
         const entries = Object.entries(node).sort(([a], [b]) => a.localeCompare(b));
         return `<ul class=\"file-tree\">${entries.map(([name, value]) => {
           if (typeof value === "string") {
             const href = buildHref(value);
-            return `<li class=\"file-item\"><a href=\"${href}\"><span class=\"file-icon\">${iconFor(value)}</span><span class=\"file-path\">${escapeHtml(name)}</span></a></li>`;
+            return `<li class=\"file-item\"><a href=\"${href}\" class=\"file-link\" data-tooltip=\"${escapeHtml(value)}\"><span class=\"file-icon\">${iconFor(value)}</span><span class=\"file-path\">${escapeHtml(name)}</span></a></li>`;
           }
-          return `<li class=\"folder-item\"><details><summary>${escapeHtml(name)}</summary>${renderTree(value)}</details></li>`;
+          const folderPath = parentPath ? parentPath + "/" + name : name;
+          return `<li class=\"folder-item\"><details data-folder-path=\"${escapeHtml(folderPath)}\"><summary>${escapeHtml(name)}</summary>${renderTree(value, folderPath)}</details></li>`;
         }).join("")}</ul>`;
+      }
+
+      function restoreFolderState() {
+        const saved = getSavedFolderState();
+        if (!saved) return; // first visit: all collapsed by default
+        const openSet = new Set(saved);
+        fileList.querySelectorAll("details").forEach((d) => {
+          d.open = openSet.has(d.getAttribute("data-folder-path"));
+        });
+      }
+
+      function attachFolderToggleListeners() {
+        fileList.addEventListener("toggle", (e) => {
+          if (e.target.tagName === "DETAILS") saveFolderState();
+        }, true);
       }
 
       async function loadFiles() {
@@ -120,6 +154,8 @@
         }
 
         fileList.innerHTML = renderTree(buildTree(files));
+        restoreFolderState();
+        attachFolderToggleListeners();
       }
 
       refreshButton.addEventListener("click", () => {
