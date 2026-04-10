@@ -6,7 +6,6 @@ import { WebSocket, WebSocketServer } from "ws"
 
 import { renderCodeBody } from "./renderers/code"
 import { renderCsvBody } from "./renderers/csv"
-import { renderDrawioBody } from "./renderers/drawio"
 import { renderHtmlBody } from "./renderers/html"
 import { renderMarkdownBody } from "./renderers/markdown"
 
@@ -360,411 +359,354 @@ function escapeHtml(text: string): string {
   })
 }
 
-function createLiveReloadScript(projectId: string, worktreeParams: string): string {
-  const wsParams = `project=${encodeURIComponent(projectId)}${worktreeParams ? `&${worktreeParams}` : ""}`
-  return `<script>
-(() => {
-  let socket;
-  let timer;
-  const connect = () => {
-    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    socket = new WebSocket(protocol + "://" + window.location.host + "/ws?${wsParams}");
-    socket.onmessage = () => window.location.reload();
-    socket.onclose = () => {
-      clearTimeout(timer);
-      timer = setTimeout(connect, 1000);
-    };
-  };
-  connect();
-})();
-</script>`
+// --- Server-side sidebar rendering ---
+
+const ICON_COLORS: Record<string, [string, string]> = {
+  ".ts": ["#3178c6", "TS"], ".tsx": ["#3178c6", "TX"],
+  ".js": ["#f1e05a", "JS"], ".cjs": ["#f1e05a", "JS"], ".mjs": ["#f1e05a", "JS"],
+  ".jsx": ["#f1e05a", "JX"],
+  ".html": ["#e34f26", "<>"], ".htm": ["#e34f26", "<>"],
+  ".css": ["#1572b6", "#"], ".json": ["#cbcb41", "{}"],
+  ".md": ["#42a5f5", "M↓"], ".py": ["#3572A5", "PY"],
+  ".go": ["#00ADD8", "GO"], ".rs": ["#dea584", "RS"],
+  ".drawio": ["#f08705", "D"], ".csv": ["#217346", "CSV"],
 }
 
-function createSidebarScript(projectId: string, currentFile: string, worktreeParams: string, rootDir: string): string {
-  const escaped = JSON.stringify(currentFile)
-  const escapedProjectId = JSON.stringify(projectId)
-  const escapedWorktreeParams = JSON.stringify(worktreeParams)
-  const escapedRootDir = JSON.stringify(rootDir)
-  return `<script>
-(() => {
-  const currentFile = ${escaped};
-  const projectId = ${escapedProjectId};
-  const worktreeParams = ${escapedWorktreeParams};
-  const rootDir = ${escapedRootDir};
-  const sidebar = document.getElementById("preview-sidebar");
+function fileIconSvg(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase()
+  const match = ICON_COLORS[ext]
+  const color = match ? match[0] : "#519aba"
+  const text = match ? match[1] : ext.replace(".", "").substring(0, 2).toUpperCase() || "F"
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16"><path fill="${color}" d="M13.85 4.44l-3.28-3.3c-.19-.18-.43-.28-.71-.28H3.5c-.55 0-1 .45-1 1v12.28c0 .55.45 1 1 1h9c.55 0 1-.45 1-1V5.14c0-.26-.1-.51-.28-.7zM9.5 2.56L12.06 5H9.5V2.56zM12.5 14h-9V2.5h5V5.5h3.5v8.5z"/><text x="8" y="11" font-size="5" font-family="sans-serif" font-weight="bold" fill="${color}" text-anchor="middle">${text}</text></svg>`
+}
 
-  const escapeHtml = (v) => v
-    .replaceAll("&", "&amp;").replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;").replaceAll("\\"", "&quot;");
+interface FileTreeNode { [key: string]: string | FileTreeNode }
 
-  const iconFor = (file) => {
-    let color = "#519aba";
-    let text = "";
-    const f = file.toLowerCase();
-    if (f.endsWith(".ts")) { color = "#3178c6"; text = "TS"; }
-    else if (f.endsWith(".tsx")) { color = "#3178c6"; text = "TX"; }
-    else if (f.endsWith(".js") || f.endsWith(".cjs") || f.endsWith(".mjs")) { color = "#f1e05a"; text = "JS"; }
-    else if (f.endsWith(".jsx")) { color = "#f1e05a"; text = "JX"; }
-    else if (f.endsWith(".html") || f.endsWith(".htm")) { color = "#e34f26"; text = "<>"; }
-    else if (f.endsWith(".css")) { color = "#1572b6"; text = "#"; }
-    else if (f.endsWith(".json")) { color = "#cbcb41"; text = "{}"; }
-    else if (f.endsWith(".md")) { color = "#42a5f5"; text = "M↓"; }
-    else if (f.endsWith(".py")) { color = "#3572A5"; text = "PY"; }
-    else if (f.endsWith(".go")) { color = "#00ADD8"; text = "GO"; }
-    else if (f.endsWith(".rs")) { color = "#dea584"; text = "RS"; }
-    else if (f.endsWith(".drawio")) { color = "#f08705"; text = "D"; }
-    else if (f.endsWith(".csv")) { color = "#217346"; text = "CSV"; }
-    else { text = f.split('.').pop().substring(0, 2).toUpperCase() || "F"; }
-
-    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16"><path fill="' + color + '" d="M13.85 4.44l-3.28-3.3c-.19-.18-.43-.28-.71-.28H3.5c-.55 0-1 .45-1 1v12.28c0 .55.45 1 1 1h9c.55 0 1-.45 1-1V5.14c0-.26-.1-.51-.28-.7zM9.5 2.56L12.06 5H9.5V2.56zM12.5 14h-9V2.5h5V5.5h3.5v8.5z"/><text x="8" y="11" font-size="5" font-family="sans-serif" font-weight="bold" fill="' + color + '" text-anchor="middle">' + text + '</text></svg>';
-  };
-
-  function buildHref(file) {
-    let href = "/preview?project=" + encodeURIComponent(projectId) + "&file=" + encodeURIComponent(file);
-    if (worktreeParams) href += "&" + worktreeParams;
-    return href;
-  }
-
-  function buildTree(files) {
-    const root = {};
-    for (const file of files) {
-      const parts = file.split("/");
-      let cursor = root;
-      for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
-        if (i === parts.length - 1) { cursor[part] = file; }
-        else { cursor[part] = cursor[part] || {}; cursor = cursor[part]; }
-      }
+function buildFileTree(files: string[]): FileTreeNode {
+  const root: FileTreeNode = {}
+  for (const file of files) {
+    const parts = file.split("/")
+    let cursor = root
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]
+      if (i === parts.length - 1) { cursor[part] = file }
+      else { if (!cursor[part] || typeof cursor[part] === "string") cursor[part] = {}; cursor = cursor[part] as FileTreeNode }
     }
-    return root;
   }
+  return root
+}
 
-  var SIDEBAR_FOLDER_KEY = "sidebar-folder-state:" + projectId + ":" + worktreeParams;
+function renderFileTreeHtml(node: FileTreeNode, projectId: string, worktreeParams: string, currentFile: string, parentPath = ""): string {
+  const entries = Object.entries(node).sort(([a], [b]) => a.localeCompare(b))
+  const items = entries.map(([name, value]) => {
+    if (typeof value === "string") {
+      let href = `/preview?project=${encodeURIComponent(projectId)}&file=${encodeURIComponent(value)}`
+      if (worktreeParams) href += `&${worktreeParams}`
+      const active = value === currentFile ? " active" : ""
+      return `<li class="file-item"><a href="${href}" class="file-link${active}" data-tooltip="${escapeHtml(value)}"><span class="file-icon">${fileIconSvg(value)}</span><span class="file-path">${escapeHtml(name)}</span></a></li>`
+    }
+    const folderPath = parentPath ? `${parentPath}/${name}` : name
+    const hasActive = currentFile && JSON.stringify(value).includes(JSON.stringify(currentFile).slice(1, -1))
+    const open = hasActive ? " open" : ""
+    const inner = renderFileTreeHtml(value as FileTreeNode, projectId, worktreeParams, currentFile, folderPath)
+    return `<li class="folder-item"><details data-folder-path="${escapeHtml(folderPath)}"${open}><summary>${escapeHtml(name)}</summary>${inner}</details></li>`
+  })
+  return `<ul class="file-tree">${items.join("")}</ul>`
+}
 
-  function getSavedSidebarFolderState() {
-    try {
-      var raw = localStorage.getItem(SIDEBAR_FOLDER_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch(e) { return null; }
-  }
+const BRANCH_SVG = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 6.5v3M11 6.5C11 8 9.5 9.5 5 9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="5" cy="5" r="1.5" stroke="currentColor" stroke-width="1.3"/><circle cx="5" cy="11" r="1.5" stroke="currentColor" stroke-width="1.3"/><circle cx="11" cy="5" r="1.5" stroke="currentColor" stroke-width="1.3"/></svg>'
+const CHEVRON_SVG = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+const CHECK_SVG = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3.5 7L6 9.5L10.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+const COPY_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4.5 3A1.5 1.5 0 0 1 6 1.5h5.5a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 11V3z" stroke="currentColor" stroke-width="1.3"/><path d="M3 4.5h-.5A1.5 1.5 0 0 0 1 6v7.5A1.5 1.5 0 0 0 2.5 15H10a1.5 1.5 0 0 0 1.5-1.5V13" stroke="currentColor" stroke-width="1.3"/></svg>'
+const FOLDER_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3.38a1 1 0 0 1 .72.3L8.42 3.7a1 1 0 0 0 .72.3H13a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5H3A1.5 1.5 0 0 1 1.5 12.5v-9z" stroke="currentColor" stroke-width="1.2"/></svg>'
 
-  function saveSidebarFolderState() {
+function renderWorktreeSwitcherHtml(worktrees: WorktreeInfo[], activeWt: string, projectId: string): string {
+  if (worktrees.length === 0) return ""
+  const allOptions: { value: string; label: string }[] = [{ value: "", label: "main" }]
+  for (const wt of worktrees) allOptions.push({ value: wt.name, label: wt.branch ? `${wt.name} (${wt.branch})` : wt.name })
+  const current = allOptions.find((o) => o.value === activeWt) ?? allOptions[0]
+
+  const optionItems = allOptions.map((opt) => {
+    const isActive = opt.value === activeWt
+    const badge = opt.value === "" ? '<span class="wt-option-badge">default</span>' : ""
+    let href = `/browse?project=${encodeURIComponent(projectId)}`
+    if (opt.value) href += `&worktree=${encodeURIComponent(opt.value)}`
+    return `<button class="wt-option" type="button" data-active="${isActive}" data-href="${escapeHtml(href)}"><span class="wt-option-check">${CHECK_SVG}</span><span class="wt-option-label">${escapeHtml(opt.label)}</span>${badge}</button>`
+  }).join("")
+
+  return `<div class="wt-switcher" id="sidebar-wt-switcher"><button class="wt-trigger" type="button" aria-expanded="false"><span class="wt-trigger-icon">${BRANCH_SVG}</span><span class="wt-trigger-name">${escapeHtml(current.label)}</span><span class="wt-trigger-chevron">${CHEVRON_SVG}</span></button><div class="wt-dropdown" data-open="false">${optionItems}</div></div>`
+}
+
+function renderCopyPathHtml(rootDir: string): string {
+  const projectName = rootDir.split("/").filter(Boolean).pop() || rootDir
+  return `<div class="copy-path-row"><span class="copy-path-project" title="${escapeHtml(rootDir)}">${FOLDER_SVG}<span class="copy-path-name">${escapeHtml(projectName)}</span></span><button class="copy-path-btn" id="copy-path-btn" type="button" title="${escapeHtml(rootDir)}">${COPY_SVG}<span>Copy Path</span></button></div>`
+}
+
+async function renderSidebarHtml(projectId: string, worktreeParams: string, currentFile: string, projectRootDir: string, rootDir: string): Promise<string> {
+  const [files, worktrees] = await Promise.all([
+    collectPreviewFiles(rootDir),
+    listWorktrees(projectRootDir),
+  ])
+  const activeWt = new URLSearchParams(worktreeParams).get("worktree") || ""
+  const wtHtml = renderWorktreeSwitcherHtml(worktrees, activeWt, projectId)
+  const cpHtml = renderCopyPathHtml(rootDir)
+  if (files.length === 0) return `${wtHtml}${cpHtml}<div class="sidebar-loading">No files found.</div>`
+  const tree = buildFileTree(files)
+  const treeHtml = renderFileTreeHtml(tree, projectId, worktreeParams, currentFile)
+  return `${wtHtml}${cpHtml}<div class="sidebar-header"><h2>FILES</h2></div>${treeHtml}`
+}
+
+// --- Shell page (SPA) ---
+
+async function renderShellPage(projectId: string, worktreeParams: string, rootDir: string, sidebarHtml: string, initialContent?: RenderResult): Promise<string> {
+  const contentClass = initialContent ? initialContent.contentClass : "preview-content"
+  const contentBody = initialContent ? initialContent.body : ""
+  const title = initialContent?.title || "Preview"
+  const css = await getStylesCss()
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(title)}</title>
+  <style>${css}</style>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css" media="(prefers-color-scheme: light)" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css" media="(prefers-color-scheme: dark)" />
+  <script>
+(function(){var s=localStorage.getItem("preview-sidebar-width");if(s){var w=parseInt(s,10);if(w>=160&&w<=window.innerWidth*0.5)document.documentElement.style.setProperty("--sidebar-w",w+"px")}})();
+  </script>
+</head>
+<body>
+  <div class="preview-layout">
+    <nav id="preview-sidebar" class="preview-sidebar">${sidebarHtml}</nav>
+    <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
+    <div id="preview-content" class="${contentClass}">${contentBody}</div>
+  </div>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+  <script>
+${shellScript(projectId, worktreeParams, rootDir)}
+  </script>
+</body>
+</html>`
+}
+
+function shellScript(projectId: string, worktreeParams: string, rootDir: string): string {
+  return `(function(){
+  var projectId = ${JSON.stringify(projectId)};
+  var worktreeParams = ${JSON.stringify(worktreeParams)};
+  var rootDir = ${JSON.stringify(rootDir)};
+  var content = document.getElementById("preview-content");
+  var sidebar = document.getElementById("preview-sidebar");
+
+  // --- sidebar resize ---
+  (function() {
+    var handle = document.getElementById("sidebar-resize-handle");
+    if (!sidebar || !handle) return;
+    var KEY = "preview-sidebar-width";
+    var dragging = false, startX = 0, startW = 0;
+    handle.addEventListener("mousedown", function(e) {
+      e.preventDefault(); dragging = true; startX = e.clientX; startW = sidebar.getBoundingClientRect().width;
+      handle.classList.add("dragging"); document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none";
+    });
+    document.addEventListener("mousemove", function(e) {
+      if (!dragging) return;
+      sidebar.style.width = Math.min(Math.max(startW + e.clientX - startX, 160), window.innerWidth * 0.5) + "px";
+    });
+    document.addEventListener("mouseup", function() {
+      if (!dragging) return; dragging = false; handle.classList.remove("dragging");
+      document.body.style.cursor = ""; document.body.style.userSelect = "";
+      var finalW = Math.round(sidebar.getBoundingClientRect().width);
+      localStorage.setItem(KEY, String(finalW));
+      document.documentElement.style.setProperty("--sidebar-w", finalW + "px");
+    });
+  })();
+
+  // --- sidebar folder state ---
+  var FOLDER_KEY = "sidebar-folder-state:" + projectId + ":" + worktreeParams;
+  function saveFolderState() {
     var open = [];
-    sidebar.querySelectorAll("details[data-folder-path]").forEach(function(d) {
-      if (d.open) open.push(d.getAttribute("data-folder-path"));
-    });
-    try { localStorage.setItem(SIDEBAR_FOLDER_KEY, JSON.stringify(open)); } catch(e) {}
+    sidebar.querySelectorAll("details[data-folder-path]").forEach(function(d) { if (d.open) open.push(d.getAttribute("data-folder-path")); });
+    try { localStorage.setItem(FOLDER_KEY, JSON.stringify(open)); } catch(e) {}
   }
-
-  function renderTree(node, parentPath) {
-    parentPath = parentPath || "";
-    const entries = Object.entries(node).sort(([a],[b]) => a.localeCompare(b));
-    return '<ul class="file-tree">' + entries.map(([name, value]) => {
-      if (typeof value === "string") {
-        const href = buildHref(value);
-        const active = value === currentFile ? " active" : "";
-        return '<li class="file-item"><a href="' + href + '" class="file-link' + active + '" data-tooltip="' + escapeHtml(value) + '"><span class="file-icon">' + iconFor(value) + '</span><span class="file-path">' + escapeHtml(name) + '</span></a></li>';
-      }
-      const folderPath = parentPath ? parentPath + "/" + name : name;
-      const hasActive = JSON.stringify(value).includes(JSON.stringify(currentFile).slice(1,-1));
-      const open = hasActive ? " open" : "";
-      return '<li class="folder-item"><details data-folder-path="' + escapeHtml(folderPath) + '"' + open + '><summary>' + escapeHtml(name) + '</summary>' + renderTree(value, folderPath) + '</details></li>';
-    }).join("") + '</ul>';
-  }
-
-  function restoreSidebarFolderState() {
-    var saved = getSavedSidebarFolderState();
-    if (!saved) return; // first visit: use default behavior (active file's folder open)
-    var openSet = {};
+  function restoreFolderState() {
+    var raw; try { raw = localStorage.getItem(FOLDER_KEY); } catch(e) { return; }
+    if (!raw) return;
+    var openSet = {}; var saved = JSON.parse(raw);
     for (var i = 0; i < saved.length; i++) openSet[saved[i]] = true;
-    sidebar.querySelectorAll("details[data-folder-path]").forEach(function(d) {
-      d.open = !!openSet[d.getAttribute("data-folder-path")];
-    });
-    // always ensure the active file's parent folders are open
-    var activeLink = sidebar.querySelector("a.active");
-    if (activeLink) {
-      var el = activeLink.closest("details");
-      while (el) {
-        el.open = true;
-        el = el.parentElement ? el.parentElement.closest("details") : null;
-      }
-    }
+    sidebar.querySelectorAll("details[data-folder-path]").forEach(function(d) { d.open = !!openSet[d.getAttribute("data-folder-path")]; });
+    var activeLink = sidebar.querySelector("a.file-link.active");
+    if (activeLink) { var el = activeLink.closest("details"); while (el) { el.open = true; el = el.parentElement ? el.parentElement.closest("details") : null; } }
   }
+  restoreFolderState();
+  sidebar.addEventListener("toggle", function(e) { if (e.target && e.target.tagName === "DETAILS") saveFolderState(); }, true);
 
-  function attachSidebarFolderToggleListeners() {
-    sidebar.addEventListener("toggle", function(e) {
-      if (e.target.tagName === "DETAILS") saveSidebarFolderState();
-    }, true);
-  }
-
-  async function loadSidebar() {
-    sidebar.innerHTML = '<div class="sidebar-loading">Loading...</div>';
-    try {
-      let apiUrl = "/api/files?project=" + encodeURIComponent(projectId);
-      if (worktreeParams) apiUrl += "&" + worktreeParams;
-      const resp = await fetch(apiUrl);
-      const data = await resp.json();
-      const files = Array.isArray(data.files) ? data.files : [];
-
-      let worktreeHtml = "";
-      try {
-        const wtResp = await fetch("/api/worktrees?project=" + encodeURIComponent(projectId));
-        const wtData = await wtResp.json();
-        const worktrees = Array.isArray(wtData.worktrees) ? wtData.worktrees : [];
-        if (worktrees.length > 0) {
-          const params = new URLSearchParams(worktreeParams);
-          const activeWt = params.get("worktree") || "";
-          worktreeHtml = '<div class="wt-switcher" id="sidebar-wt-switcher" data-active="' + escapeHtml(activeWt) + '" data-worktrees="' + escapeHtml(JSON.stringify(worktrees)) + '"></div>';
-        }
-      } catch {}
-
-      var copySvg = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4.5 3A1.5 1.5 0 0 1 6 1.5h5.5a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 11V3z" stroke="currentColor" stroke-width="1.3"/><path d="M3 4.5h-.5A1.5 1.5 0 0 0 1 6v7.5A1.5 1.5 0 0 0 2.5 15H10a1.5 1.5 0 0 0 1.5-1.5V13" stroke="currentColor" stroke-width="1.3"/></svg>';
-      var folderSvg = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3.38a1 1 0 0 1 .72.3L8.42 3.7a1 1 0 0 0 .72.3H13a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5H3A1.5 1.5 0 0 1 1.5 12.5v-9z" stroke="currentColor" stroke-width="1.2"/></svg>';
-      var projectName = rootDir.split("/").filter(Boolean).pop() || rootDir;
-      var copyPathHtml = '<div class="copy-path-row"><span class="copy-path-project" title="' + escapeHtml(rootDir) + '">' + folderSvg + '<span class="copy-path-name">' + escapeHtml(projectName) + '</span></span><button class="copy-path-btn" id="copy-path-btn" type="button" title="' + escapeHtml(rootDir) + '">' + copySvg + '<span>Copy Path</span></button></div>';
-
-      if (files.length === 0) {
-        sidebar.innerHTML = worktreeHtml + copyPathHtml + '<div class="sidebar-loading">No files found.</div>';
-        attachWorktreeHandler();
-        attachCopyPathHandler();
-        return;
-      }
-      sidebar.innerHTML = worktreeHtml + copyPathHtml + '<div class="sidebar-header"><h2>FILES</h2></div>' + renderTree(buildTree(files));
-      restoreSidebarFolderState();
-      attachSidebarFolderToggleListeners();
-      attachWorktreeHandler();
-      attachCopyPathHandler();
-      const active = sidebar.querySelector("a.active");
-      if (active) active.scrollIntoView({ block: "center", behavior: "instant" });
-    } catch {
-      sidebar.innerHTML = '<div class="sidebar-loading">Failed to load.</div>';
-    }
-  }
-
-  function attachWorktreeHandler() {
-    const container = document.getElementById("sidebar-wt-switcher");
+  // --- worktree dropdown ---
+  (function() {
+    var container = document.getElementById("sidebar-wt-switcher");
     if (!container) return;
-    const activeWt = container.getAttribute("data-active") || "";
-    const worktrees = JSON.parse(container.getAttribute("data-worktrees") || "[]");
-
-    const branchSvg = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 6.5v3M11 6.5C11 8 9.5 9.5 5 9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="5" cy="5" r="1.5" stroke="currentColor" stroke-width="1.3"/><circle cx="5" cy="11" r="1.5" stroke="currentColor" stroke-width="1.3"/><circle cx="11" cy="5" r="1.5" stroke="currentColor" stroke-width="1.3"/></svg>';
-    const chevronSvg = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-    const checkSvg = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3.5 7L6 9.5L10.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
-    const allOptions = [{ value: "", label: "main" }];
-    for (const wt of worktrees) {
-      const label = (typeof wt === "object" && wt.branch) ? wt.name + " (" + wt.branch + ")" : (wt.name || wt);
-      allOptions.push({ value: wt.name || wt, label: label });
-    }
-    const current = allOptions.find(function(o) { return o.value === activeWt; }) || allOptions[0];
-
-    const trigger = document.createElement("button");
-    trigger.className = "wt-trigger";
-    trigger.type = "button";
-    trigger.setAttribute("aria-expanded", "false");
-    trigger.innerHTML = '<span class="wt-trigger-icon">' + branchSvg + '</span><span class="wt-trigger-name">' + escapeHtml(current.label) + '</span><span class="wt-trigger-chevron">' + chevronSvg + '</span>';
-
-    const dropdown = document.createElement("div");
-    dropdown.className = "wt-dropdown";
-    dropdown.setAttribute("data-open", "false");
-
-    for (const opt of allOptions) {
-      const btn = document.createElement("button");
-      btn.className = "wt-option";
-      btn.type = "button";
-      btn.setAttribute("data-active", opt.value === activeWt ? "true" : "false");
-      const badge = opt.value === "" ? '<span class="wt-option-badge">default</span>' : "";
-      btn.innerHTML = '<span class="wt-option-check">' + checkSvg + '</span><span class="wt-option-label">' + escapeHtml(opt.label) + '</span>' + badge;
-      btn.addEventListener("click", function() {
-        var params = new URLSearchParams();
-        params.set("project", projectId);
-        if (opt.value) params.set("worktree", opt.value);
-        window.location.href = "/browse?" + params.toString();
-      });
-      dropdown.appendChild(btn);
-    }
-
+    var trigger = container.querySelector(".wt-trigger");
+    var dropdown = container.querySelector(".wt-dropdown");
+    if (!trigger || !dropdown) return;
     trigger.addEventListener("click", function(e) {
       e.stopPropagation();
-      const open = dropdown.getAttribute("data-open") === "true";
+      var open = dropdown.getAttribute("data-open") === "true";
       dropdown.setAttribute("data-open", open ? "false" : "true");
       trigger.setAttribute("aria-expanded", open ? "false" : "true");
     });
-
-    document.addEventListener("click", function() {
-      dropdown.setAttribute("data-open", "false");
-      trigger.setAttribute("aria-expanded", "false");
+    document.addEventListener("click", function() { dropdown.setAttribute("data-open", "false"); trigger.setAttribute("aria-expanded", "false"); });
+    dropdown.querySelectorAll(".wt-option").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var href = btn.getAttribute("data-href");
+        if (href) window.location.href = href;
+      });
     });
+  })();
 
-    container.appendChild(trigger);
-    container.appendChild(dropdown);
-  }
-
-  function copyToClipboard(text) {
-    if (navigator.clipboard && window.isSecureContext) {
-      return navigator.clipboard.writeText(text);
-    }
-    var ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.left = "-9999px";
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
-    return Promise.resolve();
-  }
-
-  function attachCopyPathHandler() {
+  // --- copy path ---
+  (function() {
     var btn = document.getElementById("copy-path-btn");
     if (!btn) return;
     btn.addEventListener("click", function() {
-      copyToClipboard(rootDir).then(function() {
+      var p = navigator.clipboard ? navigator.clipboard.writeText(rootDir) : Promise.resolve();
+      p.then(function() {
         var label = btn.querySelector("span:last-child");
-        if (label) {
-          var prev = label.textContent;
-          label.textContent = "Copied!";
-          btn.classList.add("copied");
-          setTimeout(function() { label.textContent = prev; btn.classList.remove("copied"); }, 1500);
-        }
+        if (!label) return;
+        var prev = label.textContent; label.textContent = "Copied!"; btn.classList.add("copied");
+        setTimeout(function() { label.textContent = prev; btn.classList.remove("copied"); }, 1500);
       });
     });
+  })();
+
+  // --- SPA router ---
+  function currentFile() {
+    var params = new URLSearchParams(window.location.search);
+    return params.get("file") || "";
   }
 
-  loadSidebar();
-})();
-</script>`
-}
-
-function createTocScript(): string {
-  return `<script>
-(() => {
-  const container = document.querySelector(".preview-main") || document.querySelector(".preview-content");
-  if (!container) return;
-  const headings = container.querySelectorAll("h1, h2, h3");
-  const tocNav = document.getElementById("toc-nav");
-  if (!tocNav || !headings.length) { if (tocNav) tocNav.remove(); return; }
-  const list = tocNav.querySelector("ul");
-  headings.forEach((h, i) => {
-    if (!h.id) h.id = "toc-id-" + i;
-    const li = document.createElement("li");
-    const a = document.createElement("a");
-    a.href = "#" + h.id;
-    a.textContent = h.textContent;
-    a.className = "toc-" + h.tagName.toLowerCase();
-    a.addEventListener("click", (e) => {
-      e.preventDefault();
-      document.getElementById(h.id).scrollIntoView({ behavior: "smooth" });
+  function updateSidebarActive(file) {
+    sidebar.querySelectorAll("a.file-link.active").forEach(function(a) { a.classList.remove("active"); });
+    if (!file) return;
+    sidebar.querySelectorAll("a.file-link").forEach(function(a) {
+      var tooltip = a.getAttribute("data-tooltip");
+      if (tooltip === file) {
+        a.classList.add("active");
+        var el = a.closest("details");
+        while (el) { el.open = true; el = el.parentElement ? el.parentElement.closest("details") : null; }
+        a.scrollIntoView({ block: "nearest", behavior: "instant" });
+      }
     });
-    li.appendChild(a);
-    list.appendChild(li);
-  });
-  const links = list.querySelectorAll("a");
-  const scrollParent = document.querySelector(".preview-main") || document.querySelector(".preview-content");
-  let ticking = false;
-  function updateActive() {
-    const scrollTop = scrollParent.scrollTop;
-    let current = null;
-    for (const h of headings) {
-      if (h.offsetTop - 80 <= scrollTop) current = h;
-    }
-    if (current) {
-      links.forEach(l => l.classList.remove("active"));
-      const active = list.querySelector('a[href="#' + current.id + '"]');
-      if (active) { active.classList.add("active"); active.scrollIntoView({ block: "nearest", behavior: "instant" }); }
-    }
-    ticking = false;
-  }
-  scrollParent.addEventListener("scroll", () => { if (!ticking) { ticking = true; requestAnimationFrame(updateActive); } });
-  if (links.length) links[0].classList.add("active");
-})();
-</script>`
-}
-
-function createSidebarResizeScript(): string {
-  return `<script>
-(() => {
-  const sidebar = document.getElementById("preview-sidebar");
-  const handle = document.getElementById("sidebar-resize-handle");
-  if (!sidebar || !handle) return;
-
-  const STORAGE_KEY = "preview-sidebar-width";
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) {
-    const w = parseInt(saved, 10);
-    if (w >= 160 && w <= window.innerWidth * 0.5) {
-      sidebar.style.width = w + "px";
-    }
   }
 
-  let dragging = false;
-  let startX = 0;
-  let startWidth = 0;
+  function loadContent(url, pushState) {
+    var u = new URL(url, window.location.origin);
+    var pathname = u.pathname;
+    var params = u.searchParams;
+    var file = params.get("file") || "";
+    var apiUrl = "/api/render" + u.search;
+    content.style.opacity = "0.5";
+    fetch(apiUrl).then(function(resp) {
+      if (!resp.ok) throw new Error(resp.status + "");
+      return resp.json();
+    }).then(function(data) {
+      document.title = data.title || "Preview";
+      content.className = data.contentClass || "preview-content";
+      content.innerHTML = data.body;
+      content.style.opacity = "";
+      content.querySelectorAll("pre code").forEach(function(b) { if (window.hljs) window.hljs.highlightElement(b); });
+      initToc();
+      initDrawio();
+      updateSidebarActive(file);
+      if (pushState) history.pushState(null, "", url);
+    }).catch(function() {
+      content.innerHTML = '<div class="browse-empty"><p>Failed to load content.</p></div>';
+      content.style.opacity = "";
+    });
+  }
 
-  handle.addEventListener("mousedown", (e) => {
-    e.preventDefault();
-    dragging = true;
-    startX = e.clientX;
-    startWidth = sidebar.getBoundingClientRect().width;
-    handle.classList.add("dragging");
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
+  function navigate(url) { loadContent(url, true); }
+
+  // intercept all sidebar and content link clicks
+  document.addEventListener("click", function(e) {
+    var a = e.target.closest ? e.target.closest("a[href]") : null;
+    if (!a) return;
+    var href = a.getAttribute("href");
+    if (!href || href.startsWith("http") || href.startsWith("#") || a.target === "_blank") return;
+    if (href.startsWith("/preview?") || href.startsWith("/browse?")) {
+      e.preventDefault();
+      navigate(href);
+    }
   });
 
-  document.addEventListener("mousemove", (e) => {
-    if (!dragging) return;
-    const delta = e.clientX - startX;
-    const newWidth = Math.min(Math.max(startWidth + delta, 160), window.innerWidth * 0.5);
-    sidebar.style.width = newWidth + "px";
-  });
+  window.addEventListener("popstate", function() { loadContent(window.location.pathname + window.location.search, false); });
 
-  document.addEventListener("mouseup", () => {
-    if (!dragging) return;
-    dragging = false;
-    handle.classList.remove("dragging");
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
-    localStorage.setItem(STORAGE_KEY, String(Math.round(sidebar.getBoundingClientRect().width)));
-  });
-})();
-</script>`
-}
+  // --- live reload WebSocket ---
+  (function() {
+    var wsParams = "project=" + encodeURIComponent(projectId) + (worktreeParams ? "&" + worktreeParams : "");
+    var socket, timer;
+    function connect() {
+      var protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      socket = new WebSocket(protocol + "://" + window.location.host + "/ws?" + wsParams);
+      socket.onmessage = function() {
+        var file = currentFile();
+        if (file) loadContent(window.location.pathname + window.location.search, false);
+      };
+      socket.onclose = function() { clearTimeout(timer); timer = setTimeout(connect, 1000); };
+    }
+    connect();
+  })();
 
-function wrapWithSidebar(projectId: string, title: string, innerBody: string, currentFile: string, worktreeParams: string, rootDir: string, hasToc = false): string {
-  const tocHtml = hasToc
-    ? `<nav id="toc-nav" class="toc-nav"><div class="toc-heading">On This Page</div><ul></ul></nav>`
-    : ""
-  const contentClass = hasToc ? "preview-content preview-content-with-toc" : "preview-content"
-  const bodyWrapper = hasToc
-    ? `<div class="preview-main">\n        ${innerBody}\n      </div>\n      ${tocHtml}`
-    : innerBody
-  const tocScript = hasToc ? createTocScript() : ""
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escapeHtml(title)}</title>
-    <link rel="stylesheet" href="/styles.css" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css" media="(prefers-color-scheme: light)" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css" media="(prefers-color-scheme: dark)" />
-  </head>
-  <body>
-    <div class="preview-layout">
-      <nav id="preview-sidebar" class="preview-sidebar"></nav>
-      <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
-      <div class="${contentClass}">
-        ${bodyWrapper}
-      </div>
-    </div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
-    <script>document.querySelectorAll("pre code").forEach(b => window.hljs?.highlightElement(b));</script>
-    ${createSidebarScript(projectId, currentFile, worktreeParams, rootDir)}
-    ${tocScript}
-    ${createSidebarResizeScript()}
-    ${createLiveReloadScript(projectId, worktreeParams)}
-  </body>
-</html>`
+  // --- TOC init (called after content load) ---
+  function initToc() {
+    var tocNav = content.querySelector("#toc-nav");
+    if (!tocNav) return;
+    var scrollParent = content.querySelector(".preview-main") || content;
+    var headings = (content.querySelector(".preview-main") || content).querySelectorAll("h1, h2, h3");
+    if (!headings.length) { tocNav.remove(); return; }
+    var list = tocNav.querySelector("ul");
+    list.innerHTML = "";
+    headings.forEach(function(h, i) {
+      if (!h.id) h.id = "toc-id-" + i;
+      var li = document.createElement("li");
+      var a = document.createElement("a");
+      a.href = "#" + h.id; a.textContent = h.textContent; a.className = "toc-" + h.tagName.toLowerCase();
+      a.addEventListener("click", function(e) { e.preventDefault(); document.getElementById(h.id).scrollIntoView({ behavior: "smooth" }); });
+      li.appendChild(a); list.appendChild(li);
+    });
+    var links = list.querySelectorAll("a");
+    var ticking = false;
+    function updateActive() {
+      var scrollTop = scrollParent.scrollTop; var cur = null;
+      for (var j = 0; j < headings.length; j++) { if (headings[j].offsetTop - 80 <= scrollTop) cur = headings[j]; }
+      if (cur) { links.forEach(function(l) { l.classList.remove("active"); }); var ac = list.querySelector('a[href="#' + cur.id + '"]'); if (ac) { ac.classList.add("active"); ac.scrollIntoView({ block: "nearest", behavior: "instant" }); } }
+      ticking = false;
+    }
+    scrollParent.addEventListener("scroll", function() { if (!ticking) { ticking = true; requestAnimationFrame(updateActive); } });
+    if (links.length) links[0].classList.add("active");
+  }
+
+  // --- drawio init (called after content load) ---
+  function initDrawio() {
+    var viewer = content.querySelector("#drawio-viewer");
+    if (!viewer || !viewer.getAttribute("data-mxgraph")) return;
+    if (typeof GraphViewer !== "undefined" && GraphViewer.processElements) {
+      GraphViewer.processElements();
+    } else {
+      var s = document.createElement("script");
+      s.src = "https://viewer.diagrams.net/js/viewer-static.min.js";
+      s.onload = function() { if (typeof GraphViewer !== "undefined") GraphViewer.processElements(); };
+      document.head.appendChild(s);
+    }
+  }
+
+  // --- initial content ---
+  if (content.innerHTML.trim()) {
+    content.querySelectorAll("pre code").forEach(function(b) { if (window.hljs) window.hljs.highlightElement(b); });
+    initToc();
+    initDrawio();
+  } else {
+    loadContent(window.location.pathname + window.location.search, false);
+  }
+})();`
 }
 
 function contentTypeFromPath(filePath: string): string {
@@ -958,19 +900,72 @@ function renderProjectListPage(projects: ProjectInfo[]): string {
 
 // --- Browser page ---
 
-function renderBrowsePage(projectId: string, worktreeParams: string, rootDir: string): string {
-  const emptyBody = `<div class="browse-empty">
-    <div class="browse-empty-icon">
-      <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect x="6" y="10" width="36" height="28" rx="4" stroke="currentColor" stroke-width="2" opacity="0.25"/>
-        <path d="M6 16h36" stroke="currentColor" stroke-width="2" opacity="0.15"/>
-        <path d="M20 28l4-4 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.35"/>
-        <path d="M24 24v10" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.35"/>
-      </svg>
-    </div>
-    <p>Select a file from the sidebar to preview</p>
-  </div>`
-  return wrapWithSidebar(projectId, "Preview Browser", emptyBody, "", worktreeParams, rootDir)
+const BROWSE_EMPTY_BODY = `<div class="browse-empty">
+  <div class="browse-empty-icon">
+    <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="6" y="10" width="36" height="28" rx="4" stroke="currentColor" stroke-width="2" opacity="0.25"/>
+      <path d="M6 16h36" stroke="currentColor" stroke-width="2" opacity="0.15"/>
+      <path d="M20 28l4-4 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.35"/>
+      <path d="M24 24v10" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.35"/>
+    </svg>
+  </div>
+  <p>Select a file from the sidebar to preview</p>
+</div>`
+
+interface RenderResult {
+  title: string
+  body: string
+  contentClass: string
+}
+
+async function renderContent(projectId: string, rootDir: string, wtParams: string, filePath: string | null): Promise<RenderResult> {
+  if (!filePath) {
+    return { title: "Preview Browser", body: BROWSE_EMPTY_BODY, contentClass: "preview-content" }
+  }
+
+  const absolutePath = ensureInsideRoot(rootDir, filePath)
+  const fileStat = await stat(absolutePath)
+  if (!fileStat.isFile()) {
+    return { title: "Preview Browser", body: BROWSE_EMPTY_BODY, contentClass: "preview-content" }
+  }
+
+  const extension = path.extname(absolutePath).toLowerCase()
+  const fileContent = await readFile(absolutePath, "utf-8")
+
+  if (extension === ".md") {
+    const body = await renderMarkdownBody(fileContent)
+    const tocHtml = '<nav id="toc-nav" class="toc-nav"><div class="toc-heading">On This Page</div><ul></ul></nav>'
+    return {
+      title: filePath,
+      body: `<div class="preview-main">${body}</div>${tocHtml}`,
+      contentClass: "preview-content preview-content-with-toc",
+    }
+  }
+
+  if (extension === ".drawio") {
+    const body = `<main class="drawio-container"><div id="drawio-viewer" class="mxgraph" data-mxgraph='${escapeHtml(JSON.stringify({
+      highlight: "#4f46e5", nav: true, resize: true, toolbar: "pages zoom layers tags", border: 20, page: 0, lightbox: false, "toolbar-nohide": true, xml: fileContent,
+    }))}'></div></main>`
+    return { title: filePath, body, contentClass: "preview-content" }
+  }
+
+  if (extension === ".html" || extension === ".htm") {
+    const body = renderHtmlBody(projectId, filePath, wtParams)
+    return { title: filePath, body, contentClass: "preview-content" }
+  }
+
+  if (extension === ".csv") {
+    const body = renderCsvBody(fileContent)
+    return { title: filePath, body, contentClass: "preview-content" }
+  }
+
+  const lang = getCodeLanguage(absolutePath)
+  if (lang) {
+    const body = renderCodeBody(fileContent, lang)
+    return { title: filePath, body, contentClass: "preview-content" }
+  }
+
+  return { title: "Preview Browser", body: BROWSE_EMPTY_BODY, contentClass: "preview-content" }
 }
 
 // --- WebSocket close handler ---
@@ -1044,9 +1039,11 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
     return
   }
 
-  // File browser
+  // File browser (SPA shell)
   if (pathname === "/browse") {
-    sendResponse(res, 200, renderBrowsePage(projectId, wtParams, rootDir), {
+    const sidebarHtml = await renderSidebarHtml(projectId, wtParams, "", projectRootDir, rootDir)
+    const initialContent = await renderContent(projectId, rootDir, wtParams, null)
+    sendResponse(res, 200, await renderShellPage(projectId, wtParams, rootDir, sidebarHtml, initialContent), {
       "content-type": "text/html; charset=utf-8",
     })
     return
@@ -1091,81 +1088,27 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
     }
   }
 
-  // Preview
+  // Preview (SPA shell — content loaded client-side via /api/render)
   if (pathname === "/preview") {
-    const relativePath = url.searchParams.get("file")
-    const browseParams = new URLSearchParams({ project: projectId })
-    const wtValue = url.searchParams.get("worktree")
-    if (wtValue) browseParams.set("worktree", wtValue)
-    const browseFallback = `/browse?${browseParams.toString()}`
+    const relativePath = url.searchParams.get("file") || ""
+    const sidebarHtml = await renderSidebarHtml(projectId, wtParams, relativePath, projectRootDir, rootDir)
+    const initialContent = await renderContent(projectId, rootDir, wtParams, relativePath || null)
+    sendResponse(res, 200, await renderShellPage(projectId, wtParams, rootDir, sidebarHtml, initialContent), {
+      "content-type": "text/html; charset=utf-8",
+    })
+    return
+  }
 
-    if (!relativePath) {
-      sendResponse(res, 200, renderBrowsePage(projectId, wtParams, rootDir), {
-        "content-type": "text/html; charset=utf-8",
-      })
-      return
-    }
-
+  // API: render content fragment (JSON)
+  if (pathname === "/api/render") {
+    const filePath = url.searchParams.get("file") || null
     try {
-      const absolutePath = ensureInsideRoot(rootDir, relativePath)
-      const fileStat = await stat(absolutePath)
-      if (!fileStat.isFile()) {
-        res.writeHead(302, { Location: browseFallback })
-        res.end()
-        return
-      }
-
-      const extension = path.extname(absolutePath).toLowerCase()
-      const content = await readFile(absolutePath, "utf-8")
-
-      if (extension === ".md") {
-        const body = await renderMarkdownBody(content)
-        sendResponse(res, 200, wrapWithSidebar(projectId, relativePath, body, relativePath, wtParams, rootDir, true), {
-          "content-type": "text/html; charset=utf-8",
-        })
-        return
-      }
-
-      if (extension === ".drawio") {
-        const body = renderDrawioBody(content)
-        sendResponse(res, 200, wrapWithSidebar(projectId, relativePath, body, relativePath, wtParams, rootDir), {
-          "content-type": "text/html; charset=utf-8",
-        })
-        return
-      }
-
-      if (extension === ".html" || extension === ".htm") {
-        const body = renderHtmlBody(projectId, relativePath, wtParams)
-        sendResponse(res, 200, wrapWithSidebar(projectId, relativePath, body, relativePath, wtParams, rootDir), {
-          "content-type": "text/html; charset=utf-8",
-        })
-        return
-      }
-
-      if (extension === ".csv") {
-        const body = renderCsvBody(content)
-        sendResponse(res, 200, wrapWithSidebar(projectId, relativePath, body, relativePath, wtParams, rootDir), {
-          "content-type": "text/html; charset=utf-8",
-        })
-        return
-      }
-
-      const lang = getCodeLanguage(absolutePath)
-      if (lang) {
-        const body = renderCodeBody(content, lang)
-        sendResponse(res, 200, wrapWithSidebar(projectId, relativePath, body, relativePath, wtParams, rootDir), {
-          "content-type": "text/html; charset=utf-8",
-        })
-        return
-      }
-
-      sendResponse(res, 400, "Unsupported file type")
-      return
+      const result = await renderContent(projectId, rootDir, wtParams, filePath)
+      sendJson(res, result)
     } catch {
-      res.writeHead(302, { Location: browseFallback })
-      res.end()
-      return
+      sendJson(res, { title: "Error", body: '<div class="browse-empty"><p>Failed to render file.</p></div>', contentClass: "preview-content" }, 500)
     }
+    return
   }
 
   // WebSocket upgrade is handled separately

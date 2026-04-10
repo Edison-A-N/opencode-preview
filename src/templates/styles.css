@@ -520,7 +520,7 @@ button:hover {
 }
 
 .preview-sidebar {
-  width: 280px;
+  width: var(--sidebar-w, 280px);
   min-width: 160px;
   max-width: 50vw;
   height: 100vh;
