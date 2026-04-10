@@ -467,6 +467,26 @@ button:hover {
   opacity: 1;
 }
 
+.browse-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--muted);
+  user-select: none;
+  gap: 1rem;
+}
+
+.browse-empty-icon {
+  opacity: 0.5;
+}
+
+.browse-empty p {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
 .file-icon {
   display: inline-flex;
   align-items: center;

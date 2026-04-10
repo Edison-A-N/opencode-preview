@@ -15,17 +15,7 @@ import { renderMarkdownBody } from "./renderers/markdown"
 // async request handlers in certain plugin host environments such as OpenCode).
 const TEMPLATES_DIR = path.join(import.meta.dir, "templates")
 
-// Lazy-loaded templates — read from disk on first HTTP request instead of at
-// module load time so that importing this module never blocks plugin startup.
-let _browserHtml: string | undefined
 let _stylesCss: string | undefined
-
-async function getBrowserHtml(): Promise<string> {
-  if (_browserHtml === undefined) {
-    _browserHtml = await readFile(path.join(TEMPLATES_DIR, "browser.html"), "utf-8")
-  }
-  return _browserHtml
-}
 
 async function getStylesCss(): Promise<string> {
   if (_stylesCss === undefined) {
