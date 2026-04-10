@@ -968,12 +968,19 @@ function renderProjectListPage(projects: ProjectInfo[]): string {
 
 // --- Browser page ---
 
-async function renderBrowserPage(projectId: string, rootDir: string, worktreeParams: string): Promise<string> {
-  return (await getBrowserHtml())
-    .replaceAll("{{PROJECT_DIRECTORY}}", rootDir)
-    .replaceAll("{{PROJECT_ID}}", projectId)
-    .replaceAll("{{WORKTREE_PARAMS}}", worktreeParams)
-    .replace("</body>", `${createLiveReloadScript(projectId, worktreeParams)}</body>`)
+function renderBrowsePage(projectId: string, worktreeParams: string, rootDir: string): string {
+  const emptyBody = `<div class="browse-empty">
+    <div class="browse-empty-icon">
+      <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="6" y="10" width="36" height="28" rx="4" stroke="currentColor" stroke-width="2" opacity="0.25"/>
+        <path d="M6 16h36" stroke="currentColor" stroke-width="2" opacity="0.15"/>
+        <path d="M20 28l4-4 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.35"/>
+        <path d="M24 24v10" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.35"/>
+      </svg>
+    </div>
+    <p>Select a file from the sidebar to preview</p>
+  </div>`
+  return wrapWithSidebar(projectId, "Preview Browser", emptyBody, "", worktreeParams, rootDir)
 }
 
 // --- WebSocket close handler ---
@@ -1049,7 +1056,7 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
 
   // File browser
   if (pathname === "/browse") {
-    sendResponse(res, 200, await renderBrowserPage(projectId, rootDir, wtParams), {
+    sendResponse(res, 200, renderBrowsePage(projectId, wtParams, rootDir), {
       "content-type": "text/html; charset=utf-8",
     })
     return
@@ -1103,8 +1110,9 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
     const browseFallback = `/browse?${browseParams.toString()}`
 
     if (!relativePath) {
-      res.writeHead(302, { Location: browseFallback })
-      res.end()
+      sendResponse(res, 200, renderBrowsePage(projectId, wtParams, rootDir), {
+        "content-type": "text/html; charset=utf-8",
+      })
       return
     }
 
