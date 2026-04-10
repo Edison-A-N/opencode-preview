@@ -153,7 +153,10 @@
 
       function buildSwitcher(container, worktrees, activeWt, onSwitch) {
         const allOptions = [{ value: "", label: "main" }];
-        for (const wt of worktrees) allOptions.push({ value: wt, label: wt });
+        for (const wt of worktrees) {
+          const label = (typeof wt === "object" && wt.branch) ? wt.name + " (" + wt.branch + ")" : (wt.name || wt);
+          allOptions.push({ value: wt.name || wt, label: label });
+        }
         const current = allOptions.find(o => o.value === activeWt) || allOptions[0];
 
         const trigger = document.createElement("button");
