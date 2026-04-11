@@ -1096,3 +1096,231 @@ button:hover {
     filter: brightness(1.15);
   }
 }
+
+.sidebar-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.5rem 0.35rem;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+}
+
+.sidebar-tab.active {
+  color: var(--text);
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.changes-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15rem;
+  padding: 0 0.2rem;
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 0.68rem;
+}
+
+.sidebar-panel {
+  display: none;
+}
+
+.sidebar-panel.active {
+  display: block;
+}
+
+.changes-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+}
+
+.change-item {
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.change-link {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  text-decoration: none;
+  padding: 0 0.5rem;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+
+.change-link:hover {
+  background: var(--list-hover);
+}
+
+.change-link.active {
+  background: var(--list-active);
+}
+
+.change-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2rem;
+  height: 1.1rem;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.change-status-badge.status-modified {
+  color: #b35a00;
+  background: color-mix(in srgb, #d97706 22%, transparent);
+}
+
+.change-status-badge.status-added {
+  color: #1a7f37;
+  background: color-mix(in srgb, #2ea043 22%, transparent);
+}
+
+.change-status-badge.status-deleted {
+  color: #b42318;
+  background: color-mix(in srgb, #d92d20 22%, transparent);
+}
+
+.change-status-badge.status-untracked,
+.change-status-badge.status-changed,
+.change-status-badge.status-renamed {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+}
+
+.diff-body {
+  padding: 1rem 1.5rem 3rem;
+}
+
+.diff-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  padding: 0.5rem 0 0.75rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.diff-badge {
+  background: color-mix(in srgb, #7c3aed 14%, transparent);
+  color: #7c3aed;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+}
+
+.diff-path {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.diff-kind {
+  opacity: 0.8;
+}
+
+.diff-stats {
+  font-weight: 600;
+}
+
+.diff-plus {
+  color: #1a7f37;
+}
+
+.diff-minus {
+  color: #b42318;
+}
+
+.diff-count {
+  opacity: 0.75;
+}
+
+.diff-table-wrap {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow-x: auto;
+  background: var(--bg);
+}
+
+.diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+  font-size: 0.83rem;
+  line-height: 1.45;
+}
+
+.diff-line-num {
+  width: 4rem;
+  text-align: right;
+  padding: 0.1rem 0.55rem;
+  color: var(--muted);
+  border-right: 1px solid var(--border);
+  vertical-align: top;
+  user-select: none;
+}
+
+.diff-line-code {
+  padding: 0.1rem 0.65rem;
+  white-space: pre;
+}
+
+.diff-line-marker {
+  display: inline-block;
+  width: 1ch;
+  margin-right: 0.3rem;
+  opacity: 0.8;
+}
+
+.diff-line-old {
+  background: color-mix(in srgb, #d92d20 11%, transparent);
+}
+
+.diff-line-new {
+  background: color-mix(in srgb, #2ea043 11%, transparent);
+}
+
+.diff-line-ctx {
+  background: transparent;
+}
+
+.diff-line-note {
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+  color: var(--muted);
+}
+
+.diff-hunk-header {
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+
+.diff-hunk-header .diff-line-code {
+  color: var(--primary);
+  font-weight: 600;
+}

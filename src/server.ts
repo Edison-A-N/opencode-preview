@@ -6,6 +6,7 @@ import { WebSocket, WebSocketServer } from "ws"
 
 import { renderCodeBody } from "./renderers/code"
 import { renderCsvBody } from "./renderers/csv"
+import { renderDiffBody } from "./renderers/diff"
 import { countDiagramPages } from "./renderers/drawio"
 import { renderHtmlBody } from "./renderers/html"
 import { renderMarkdownBody } from "./renderers/markdown"
@@ -277,6 +278,129 @@ function worktreeQueryString(url: URL): string {
   return worktree ? `worktree=${encodeURIComponent(worktree)}` : ""
 }
 
+interface GitFileStatus {
+  path: string
+  status: string
+  statusLabel: string
+}
+
+const GIT_STATUS_LABELS: Record<string, string> = {
+  M: "Modified",
+  A: "Added",
+  D: "Deleted",
+  R: "Renamed",
+  C: "Copied",
+  U: "Unmerged",
+  "?": "Untracked",
+  "!": "Ignored",
+}
+
+function gitStatusLabel(status: string): string {
+  return GIT_STATUS_LABELS[status] ?? "Changed"
+}
+
+async function runGit(rootDir: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  const proc = Bun.spawn(["git", "-C", rootDir, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  return { code, stdout, stderr }
+}
+
+function normalizeGitPath(rawPath: string): string {
+  const unquoted = rawPath.startsWith('"') && rawPath.endsWith('"') ? rawPath.slice(1, -1) : rawPath
+  return unquoted.replace(/\\/g, "/")
+}
+
+function parsePorcelainLine(line: string): GitFileStatus | null {
+  if (line.length < 4) return null
+  const x = line[0]
+  const y = line[1]
+  const pathPart = line.slice(3).trim()
+  if (!pathPart) return null
+
+  let resolvedPath = pathPart
+  if (pathPart.includes(" -> ")) {
+    const parts = pathPart.split(" -> ")
+    resolvedPath = parts[parts.length - 1]
+  }
+
+  let status = "?"
+  if (x === "?" && y === "?") {
+    status = "?"
+  } else if (x !== " ") {
+    status = x
+  } else if (y !== " ") {
+    status = y
+  }
+
+  return {
+    path: normalizeGitPath(resolvedPath),
+    status,
+    statusLabel: gitStatusLabel(status),
+  }
+}
+
+async function gitStatus(rootDir: string): Promise<GitFileStatus[]> {
+  const result = await runGit(rootDir, ["status", "--porcelain=v1", "-uall"])
+  if (result.code !== 0) return []
+
+  const files: GitFileStatus[] = []
+  const seen = new Set<string>()
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (!line) continue
+    const parsed = parsePorcelainLine(line)
+    if (!parsed) continue
+    if (seen.has(parsed.path)) continue
+    seen.add(parsed.path)
+    files.push(parsed)
+  }
+  return files.sort((a, b) => a.path.localeCompare(b.path))
+}
+
+function buildSyntheticUntrackedDiff(filePath: string, content: string): string {
+  const normalized = content.replace(/\r\n/g, "\n")
+  const lines = normalized.length === 0 ? [] : normalized.split("\n")
+  const header = [
+    `diff --git a/${filePath} b/${filePath}`,
+    "new file mode 100644",
+    "index 0000000..0000000",
+    "--- /dev/null",
+    `+++ b/${filePath}`,
+  ]
+  if (lines.length === 0) {
+    return `${header.join("\n")}\n`
+  }
+  const body = [`@@ -0,0 +1,${lines.length} @@`, ...lines.map((line) => `+${line}`)]
+  return `${[...header, ...body].join("\n")}\n`
+}
+
+async function gitDiff(rootDir: string, filePath: string): Promise<string> {
+  const statusResult = await runGit(rootDir, ["status", "--porcelain=v1", "-uall", "--", filePath])
+  if (statusResult.code !== 0) {
+    throw new Error(statusResult.stderr || "Failed to query git status")
+  }
+
+  const statusLine = statusResult.stdout.split(/\r?\n/).find((line) => line.trim().length > 0)
+  const parsed = statusLine ? parsePorcelainLine(statusLine) : null
+  if (parsed?.status === "?") {
+    const absolutePath = ensureInsideRoot(rootDir, filePath)
+    const content = await readFile(absolutePath, "utf-8")
+    return buildSyntheticUntrackedDiff(filePath, content)
+  }
+
+  const diffResult = await runGit(rootDir, ["diff", "HEAD", "--", filePath])
+  if (diffResult.code !== 0) {
+    throw new Error(diffResult.stderr || "Failed to query git diff")
+  }
+  return diffResult.stdout
+}
+
 // --- File watcher & WebSocket ---
 
 const dirWatchers = new Map<string, { watchers: FSWatcher[]; refCount: number }>()
@@ -443,18 +567,77 @@ function renderCopyPathHtml(rootDir: string): string {
   return `<div class="copy-path-row"><span class="copy-path-project" title="${escapeHtml(rootDir)}">${FOLDER_SVG}<span class="copy-path-name">${escapeHtml(projectName)}</span></span><button class="copy-path-btn" id="copy-path-btn" type="button" title="${escapeHtml(rootDir)}">${COPY_SVG}<span>Copy Path</span></button></div>`
 }
 
-async function renderSidebarHtml(projectId: string, worktreeParams: string, currentFile: string, projectRootDir: string, rootDir: string): Promise<string> {
-  const [files, worktrees] = await Promise.all([
+async function renderSidebarHtml(
+  projectId: string,
+  worktreeParams: string,
+  currentFile: string,
+  currentDiff: string,
+  projectRootDir: string,
+  rootDir: string,
+): Promise<string> {
+  const [files, worktrees, changesSidebar] = await Promise.all([
     collectPreviewFiles(rootDir),
     listWorktrees(projectRootDir),
+    renderChangesSidebarHtml(projectId, worktreeParams, rootDir, currentDiff),
   ])
   const activeWt = new URLSearchParams(worktreeParams).get("worktree") || ""
   const wtHtml = renderWorktreeSwitcherHtml(worktrees, activeWt, projectId)
   const cpHtml = renderCopyPathHtml(rootDir)
-  if (files.length === 0) return `${wtHtml}${cpHtml}<div class="sidebar-loading">No files found.</div>`
-  const tree = buildFileTree(files)
-  const treeHtml = renderFileTreeHtml(tree, projectId, worktreeParams, currentFile)
-  return `${wtHtml}${cpHtml}<div class="sidebar-header"><h2>FILES</h2></div>${treeHtml}`
+  const treeHtml = files.length === 0
+    ? '<div class="sidebar-loading">No files found.</div>'
+    : renderFileTreeHtml(buildFileTree(files), projectId, worktreeParams, currentFile)
+  const changesHtml = changesSidebar.html
+  const defaultTab = currentDiff ? "changes" : "files"
+
+  return `${wtHtml}${cpHtml}
+  <div class="sidebar-tabs" id="sidebar-tabs">
+    <button class="sidebar-tab${defaultTab === "files" ? " active" : ""}" data-tab="files" type="button">Files</button>
+    <button class="sidebar-tab${defaultTab === "changes" ? " active" : ""}" data-tab="changes" type="button">Changes <span class="changes-count">${changesSidebar.count}</span></button>
+  </div>
+  <div class="sidebar-panel${defaultTab === "files" ? " active" : ""}" data-panel="files">${treeHtml}</div>
+  <div class="sidebar-panel${defaultTab === "changes" ? " active" : ""}" data-panel="changes">${changesHtml}</div>`
+}
+
+function changeStatusClass(status: string): string {
+  if (status === "A") return "status-added"
+  if (status === "D") return "status-deleted"
+  if (status === "M") return "status-modified"
+  if (status === "?") return "status-untracked"
+  if (status === "R") return "status-renamed"
+  return "status-changed"
+}
+
+function renderChangesListHtml(
+  projectId: string,
+  worktreeParams: string,
+  files: GitFileStatus[],
+  currentDiff: string,
+): string {
+  if (files.length === 0) {
+    return '<div class="sidebar-loading">No changes.</div>'
+  }
+
+  const items = files.map((entry) => {
+    const active = entry.path === currentDiff ? " active" : ""
+    let href = `/preview?project=${encodeURIComponent(projectId)}&diff=${encodeURIComponent(entry.path)}`
+    if (worktreeParams) href += `&${worktreeParams}`
+    return `<li class="change-item"><a href="${href}" class="change-link${active}" data-diff-path="${escapeHtml(entry.path)}" data-status="${escapeHtml(entry.status)}" title="${escapeHtml(entry.statusLabel)}"><span class="change-status-badge ${changeStatusClass(entry.status)}">${escapeHtml(entry.status)}</span><span class="file-path">${escapeHtml(entry.path)}</span></a></li>`
+  })
+
+  return `<ul class="changes-list">${items.join("")}</ul>`
+}
+
+async function renderChangesSidebarHtml(
+  projectId: string,
+  worktreeParams: string,
+  rootDir: string,
+  currentDiff = "",
+): Promise<{ html: string; count: number }> {
+  const files = await gitStatus(rootDir)
+  return {
+    html: renderChangesListHtml(projectId, worktreeParams, files, currentDiff),
+    count: files.length,
+  }
 }
 
 // --- Shell page (SPA) ---
@@ -519,7 +702,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
 
   function saveTabState() {
     try {
-      var data = { tabs: tabs.map(function(t){ return { file: t.file, title: t.title }; }), active: activeTabIndex };
+      var data = { tabs: tabs.map(function(t){ return { file: t.file, title: t.title, view: t.view || "file" }; }), active: activeTabIndex };
       localStorage.setItem(TAB_STORE_KEY, JSON.stringify(data));
     } catch(e) {}
   }
@@ -543,7 +726,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
 
       var name = document.createElement("span");
       name.className = "tab-name";
-      name.textContent = baseName(tab.file);
+      name.textContent = baseName(tab.file) + (tab.view === "diff" ? " (diff)" : "");
       name.title = tab.file || "Untitled";
 
       var close = document.createElement("span");
@@ -585,7 +768,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       initToc();
       initDrawio();
       document.title = tab.title || "Preview";
-      updateSidebarActive(tab.file);
+      updateSidebarActive(tab.file, tab.view || "file");
       renderTabBar();
       syncTabUrl();
       saveTabState();
@@ -602,7 +785,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       var wt = new URLSearchParams(worktreeParams);
       wt.forEach(function(v, k) { params.set(k, v); });
     }
-    var apiUrl = "/api/render?" + params.toString();
+    var apiUrl = (tab.view === "diff" ? "/api/render/diff?" : "/api/render?") + params.toString();
     if (doSwitch) content.style.opacity = "0.5";
     fetch(apiUrl).then(function(resp) {
       if (!resp.ok) throw new Error(resp.status + "");
@@ -620,7 +803,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
         initToc();
         initDrawio();
         document.title = tab.title;
-        updateSidebarActive(tab.file);
+        updateSidebarActive(tab.file, tab.view || "file");
       }
       renderTabBar();
       syncTabUrl();
@@ -638,7 +821,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
 
   function openTab(file) {
     for (var i = 0; i < tabs.length; i++) {
-      if (tabs[i].file === file) {
+      if (tabs[i].file === file && (tabs[i].view || "file") === "file") {
         switchToTab(i);
         return;
       }
@@ -647,7 +830,25 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       alert("Already " + MAX_TABS + " tabs open. Close one first.");
       return;
     }
-    var tab = { id: ++tabIdSeed, file: file, title: file || "Preview", cachedHtml: undefined, cachedClass: undefined, scrollTop: 0 };
+    var tab = { id: ++tabIdSeed, file: file, view: "file", title: file || "Preview", cachedHtml: undefined, cachedClass: undefined, scrollTop: 0 };
+    tabs.push(tab);
+    activeTabIndex = tabs.length - 1;
+    renderTabBar();
+    loadTabContent(tab, true);
+  }
+
+  function openDiffTab(file) {
+    for (var i = 0; i < tabs.length; i++) {
+      if (tabs[i].file === file && (tabs[i].view || "file") === "diff") {
+        switchToTab(i);
+        return;
+      }
+    }
+    if (tabs.length >= MAX_TABS) {
+      alert("Already " + MAX_TABS + " tabs open. Close one first.");
+      return;
+    }
+    var tab = { id: ++tabIdSeed, file: file, view: "diff", title: file + " (diff)", cachedHtml: undefined, cachedClass: undefined, scrollTop: 0 };
     tabs.push(tab);
     activeTabIndex = tabs.length - 1;
     renderTabBar();
@@ -662,7 +863,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       content.className = "preview-content";
       content.innerHTML = '<div class="browse-empty"><p>Select a file from the sidebar to preview</p></div>';
       document.title = "Preview";
-      updateSidebarActive("");
+      updateSidebarActive("", "file");
       renderTabBar();
       syncTabUrl();
       saveTabState();
@@ -678,10 +879,17 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     var params = new URLSearchParams(window.location.search);
     params.set("project", projectId);
     if (tab && tab.file) {
-      params.set("file", tab.file);
+      if ((tab.view || "file") === "diff") {
+        params.delete("file");
+        params.set("diff", tab.file);
+      } else {
+        params.delete("diff");
+        params.set("file", tab.file);
+      }
       history.replaceState(null, "", "/preview?" + params.toString());
     } else {
       params.delete("file");
+      params.delete("diff");
       history.replaceState(null, "", "/browse?" + params.toString());
     }
   }
@@ -728,6 +936,29 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
   restoreFolderState();
   sidebar.addEventListener("toggle", function(e) { if (e.target && e.target.tagName === "DETAILS") saveFolderState(); }, true);
 
+  // --- sidebar files/changes tabs ---
+  (function() {
+    var tabButtons = sidebar.querySelectorAll(".sidebar-tab[data-tab]");
+    if (!tabButtons.length) return;
+    function setSidebarTab(name) {
+      tabButtons.forEach(function(btn) {
+        var active = btn.getAttribute("data-tab") === name;
+        btn.classList.toggle("active", active);
+      });
+      sidebar.querySelectorAll(".sidebar-panel[data-panel]").forEach(function(panel) {
+        var active = panel.getAttribute("data-panel") === name;
+        panel.classList.toggle("active", active);
+      });
+    }
+    tabButtons.forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var name = btn.getAttribute("data-tab") || "files";
+        setSidebarTab(name);
+      });
+    });
+    sidebar.__setSidebarTab = setSidebarTab;
+  })();
+
   // --- worktree dropdown ---
   (function() {
     var container = document.getElementById("sidebar-wt-switcher");
@@ -766,9 +997,22 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
   })();
 
   // --- SPA router ---
-  function updateSidebarActive(file) {
+  function updateSidebarActive(file, view) {
     sidebar.querySelectorAll("a.file-link.active").forEach(function(a) { a.classList.remove("active"); });
+    sidebar.querySelectorAll("a.change-link.active").forEach(function(a) { a.classList.remove("active"); });
     if (!file) return;
+    if (view === "diff") {
+      if (sidebar.__setSidebarTab) sidebar.__setSidebarTab("changes");
+      sidebar.querySelectorAll("a.change-link").forEach(function(a) {
+        var diffPath = a.getAttribute("data-diff-path");
+        if (diffPath === file) {
+          a.classList.add("active");
+          a.scrollIntoView({ block: "nearest", behavior: "instant" });
+        }
+      });
+      return;
+    }
+    if (sidebar.__setSidebarTab) sidebar.__setSidebarTab("files");
     sidebar.querySelectorAll("a.file-link").forEach(function(a) {
       var tooltip = a.getAttribute("data-tooltip");
       if (tooltip === file) {
@@ -778,6 +1022,73 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
         a.scrollIntoView({ block: "nearest", behavior: "instant" });
       }
     });
+  }
+
+  function updateChangesSidebar(files) {
+    var panel = sidebar.querySelector('.sidebar-panel[data-panel="changes"]');
+    if (!panel) return;
+    var count = sidebar.querySelector(".changes-count");
+    if (count) count.textContent = String(files.length);
+    if (!files.length) {
+      panel.innerHTML = '<div class="sidebar-loading">No changes.</div>';
+      return;
+    }
+    var list = document.createElement("ul");
+    list.className = "changes-list";
+    function statusClass(status) {
+      if (status === "A") return "status-added";
+      if (status === "D") return "status-deleted";
+      if (status === "M") return "status-modified";
+      if (status === "?") return "status-untracked";
+      if (status === "R") return "status-renamed";
+      return "status-changed";
+    }
+    files.forEach(function(entry) {
+      var li = document.createElement("li");
+      li.className = "change-item";
+
+      var a = document.createElement("a");
+      a.className = "change-link";
+      a.setAttribute("href", "/preview?project=" + encodeURIComponent(projectId) + "&diff=" + encodeURIComponent(entry.path) + (worktreeParams ? "&" + worktreeParams : ""));
+      a.setAttribute("data-diff-path", entry.path);
+      a.setAttribute("data-status", entry.status);
+      a.title = entry.statusLabel || "Changed";
+
+      var badge = document.createElement("span");
+      badge.className = "change-status-badge " + statusClass(entry.status);
+      badge.textContent = entry.status;
+
+      var pathSpan = document.createElement("span");
+      pathSpan.className = "file-path";
+      pathSpan.textContent = entry.path;
+
+      a.appendChild(badge);
+      a.appendChild(pathSpan);
+      li.appendChild(a);
+      list.appendChild(li);
+    });
+    panel.innerHTML = "";
+    panel.appendChild(list);
+
+    var active = tabs[activeTabIndex];
+    if (active && active.file && (active.view || "file") === "diff") {
+      updateSidebarActive(active.file, "diff");
+    }
+  }
+
+  function refreshChangesList() {
+    var params = new URLSearchParams();
+    params.set("project", projectId);
+    if (worktreeParams) {
+      var wt = new URLSearchParams(worktreeParams);
+      wt.forEach(function(v, k) { params.set(k, v); });
+    }
+    fetch("/api/git/status?" + params.toString()).then(function(resp) {
+      if (!resp.ok) throw new Error(resp.status + "");
+      return resp.json();
+    }).then(function(data) {
+      updateChangesSidebar(data.files || []);
+    }).catch(function() {});
   }
 
   // intercept all sidebar and content link clicks
@@ -790,6 +1101,11 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       e.preventDefault();
       var u = new URL(href, window.location.origin);
       var file = u.searchParams.get("file") || "";
+      var diff = u.searchParams.get("diff") || "";
+      if (diff) {
+        openDiffTab(diff);
+        return;
+      }
       if (file) {
         openTab(file);
       }
@@ -799,6 +1115,11 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
   window.addEventListener("popstate", function() {
     var params = new URLSearchParams(window.location.search);
     var file = params.get("file") || "";
+    var diff = params.get("diff") || "";
+    if (diff) {
+      openDiffTab(diff);
+      return;
+    }
     if (file) openTab(file);
   });
 
@@ -810,6 +1131,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       var protocol = window.location.protocol === "https:" ? "wss" : "ws";
       socket = new WebSocket(protocol + "://" + window.location.host + "/ws?" + wsParams);
       socket.onmessage = function() {
+        refreshChangesList();
         tabs.forEach(function(tab) {
           if (tab.file) {
             var isActive = tabs[activeTabIndex] === tab;
@@ -869,14 +1191,17 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
   (function() {
     var params = new URLSearchParams(window.location.search);
     var initialFile = params.get("file") || "";
+    var initialDiff = params.get("diff") || "";
     var saved = loadTabState();
 
-    if (initialFile) {
-      var tab = { id: ++tabIdSeed, file: initialFile, title: initialFile, cachedHtml: content.innerHTML.trim() ? content.innerHTML : undefined, cachedClass: content.innerHTML.trim() ? content.className : undefined, scrollTop: 0 };
+    if (initialFile || initialDiff) {
+      var initialView = initialDiff ? "diff" : "file";
+      var initialPath = initialDiff || initialFile;
+      var tab = { id: ++tabIdSeed, file: initialPath, view: initialView, title: initialPath, cachedHtml: content.innerHTML.trim() ? content.innerHTML : undefined, cachedClass: content.innerHTML.trim() ? content.className : undefined, scrollTop: 0 };
       if (saved && saved.tabs && saved.tabs.length > 0) {
-        tabs = saved.tabs.map(function(t) { return { id: ++tabIdSeed, file: t.file, title: t.title || t.file, cachedHtml: undefined, cachedClass: undefined, scrollTop: 0 }; });
+        tabs = saved.tabs.map(function(t) { return { id: ++tabIdSeed, file: t.file, view: t.view || "file", title: t.title || t.file, cachedHtml: undefined, cachedClass: undefined, scrollTop: 0 }; });
         var found = -1;
-        for (var i = 0; i < tabs.length; i++) { if (tabs[i].file === initialFile) { found = i; break; } }
+        for (var i = 0; i < tabs.length; i++) { if (tabs[i].file === initialPath && (tabs[i].view || "file") === initialView) { found = i; break; } }
         if (found >= 0) {
           tabs[found].cachedHtml = tab.cachedHtml;
           tabs[found].cachedClass = tab.cachedClass;
@@ -895,10 +1220,10 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
         initDrawio();
       }
       renderTabBar();
-      updateSidebarActive(initialFile);
+      updateSidebarActive(initialPath, initialView);
       saveTabState();
     } else if (saved && saved.tabs && saved.tabs.length > 0) {
-      tabs = saved.tabs.map(function(t) { return { id: ++tabIdSeed, file: t.file, title: t.title || t.file, cachedHtml: undefined, cachedClass: undefined, scrollTop: 0 }; });
+      tabs = saved.tabs.map(function(t) { return { id: ++tabIdSeed, file: t.file, view: t.view || "file", title: t.title || t.file, cachedHtml: undefined, cachedClass: undefined, scrollTop: 0 }; });
       activeTabIndex = Math.min(Math.max(saved.active || 0, 0), tabs.length - 1);
       renderTabBar();
       if (tabs[activeTabIndex] && tabs[activeTabIndex].file) {
@@ -907,6 +1232,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     } else {
       renderTabBar();
     }
+    refreshChangesList();
   })();
 })();`
 }
@@ -1173,6 +1499,16 @@ async function renderContent(projectId: string, rootDir: string, wtParams: strin
   return { title: "Preview Browser", body: BROWSE_EMPTY_BODY, contentClass: "preview-content" }
 }
 
+async function renderDiffContent(rootDir: string, filePath: string | null): Promise<RenderResult> {
+  if (!filePath) {
+    return { title: "Preview Browser", body: BROWSE_EMPTY_BODY, contentClass: "preview-content" }
+  }
+
+  const diff = await gitDiff(rootDir, filePath)
+  const body = renderDiffBody(diff, filePath)
+  return { title: `${filePath} (diff)`, body, contentClass: "preview-content" }
+}
+
 // --- WebSocket close handler ---
 
 function handleWebSocketClose(ws: WebSocket): void {
@@ -1246,7 +1582,7 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
 
   // File browser (SPA shell)
   if (pathname === "/browse") {
-    const sidebarHtml = await renderSidebarHtml(projectId, wtParams, "", projectRootDir, rootDir)
+    const sidebarHtml = await renderSidebarHtml(projectId, wtParams, "", "", projectRootDir, rootDir)
     const initialContent = await renderContent(projectId, rootDir, wtParams, null)
     sendResponse(res, 200, await renderShellPage(projectId, wtParams, rootDir, sidebarHtml, initialContent), {
       "content-type": "text/html; charset=utf-8",
@@ -1265,6 +1601,27 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
   if (pathname === "/api/worktrees") {
     const worktrees = await listWorktrees(projectRootDir)
     sendJson(res, { worktrees })
+    return
+  }
+
+  if (pathname === "/api/git/status") {
+    const files = await gitStatus(rootDir)
+    sendJson(res, { files })
+    return
+  }
+
+  if (pathname === "/api/git/diff") {
+    const filePath = url.searchParams.get("file") || ""
+    if (!filePath) {
+      sendResponse(res, 400, "Missing file query parameter")
+      return
+    }
+    try {
+      const diff = await gitDiff(rootDir, filePath)
+      sendJson(res, { diff, file: filePath })
+    } catch {
+      sendJson(res, { diff: "", file: filePath }, 500)
+    }
     return
   }
 
@@ -1296,8 +1653,11 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
   // Preview (SPA shell — content loaded client-side via /api/render)
   if (pathname === "/preview") {
     const relativePath = url.searchParams.get("file") || ""
-    const sidebarHtml = await renderSidebarHtml(projectId, wtParams, relativePath, projectRootDir, rootDir)
-    const initialContent = await renderContent(projectId, rootDir, wtParams, relativePath || null)
+    const diffPath = url.searchParams.get("diff") || ""
+    const sidebarHtml = await renderSidebarHtml(projectId, wtParams, relativePath, diffPath, projectRootDir, rootDir)
+    const initialContent = diffPath
+      ? await renderDiffContent(rootDir, diffPath)
+      : await renderContent(projectId, rootDir, wtParams, relativePath || null)
     sendResponse(res, 200, await renderShellPage(projectId, wtParams, rootDir, sidebarHtml, initialContent), {
       "content-type": "text/html; charset=utf-8",
     })
@@ -1312,6 +1672,17 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
       sendJson(res, result)
     } catch {
       sendJson(res, { title: "Error", body: '<div class="browse-empty"><p>Failed to render file.</p></div>', contentClass: "preview-content" }, 500)
+    }
+    return
+  }
+
+  if (pathname === "/api/render/diff") {
+    const filePath = url.searchParams.get("file") || null
+    try {
+      const result = await renderDiffContent(rootDir, filePath)
+      sendJson(res, result)
+    } catch {
+      sendJson(res, { title: "Error", body: '<div class="browse-empty"><p>Failed to render diff.</p></div>', contentClass: "preview-content" }, 500)
     }
     return
   }
