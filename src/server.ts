@@ -6,6 +6,7 @@ import { WebSocket, WebSocketServer } from "ws"
 
 import { renderCodeBody } from "./renderers/code"
 import { renderCsvBody } from "./renderers/csv"
+import { countDiagramPages } from "./renderers/drawio"
 import { renderHtmlBody } from "./renderers/html"
 import { renderMarkdownBody } from "./renderers/markdown"
 
@@ -943,7 +944,10 @@ async function renderContent(projectId: string, rootDir: string, wtParams: strin
   }
 
   if (extension === ".drawio") {
-    const body = `<main class="drawio-container"><div id="drawio-viewer" class="mxgraph" data-mxgraph='${escapeHtml(JSON.stringify({
+    const pages = countDiagramPages(fileContent)
+    const pageLabel = pages === 1 ? "1 page" : `${pages} pages`
+    const metaHtml = `<div class="drawio-meta"><span class="drawio-badge">DrawIO</span><span>${pageLabel}</span></div>`
+    const body = `${metaHtml}<main class="drawio-container"><div id="drawio-viewer" class="mxgraph" data-mxgraph='${escapeHtml(JSON.stringify({
       highlight: "#4f46e5", nav: true, resize: true, toolbar: "pages zoom layers tags", border: 20, page: 0, lightbox: false, "toolbar-nohide": true, xml: fileContent,
     }))}'></div></main>`
     return { title: filePath, body, contentClass: "preview-content" }

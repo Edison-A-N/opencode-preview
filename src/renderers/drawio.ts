@@ -1,3 +1,8 @@
+function countDiagramPages(xml: string): number {
+  const matches = xml.match(/<diagram[\s>]/g)
+  return matches ? matches.length : 1
+}
+
 export function renderDrawioBody(content: string): string {
   const escapedXml = JSON.stringify(content)
 
@@ -26,3 +31,5 @@ export function renderDrawioBody(content: string): string {
       }
     </script>`
 }
+
+export { countDiagramPages }

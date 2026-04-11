@@ -674,6 +674,26 @@ button:hover {
   }
 }
 
+.markdown-meta {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0 0.75rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.markdown-badge {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+}
+
 .markdown-body {
   max-width: 860px;
   margin: 0 auto;
@@ -724,6 +744,26 @@ button:hover {
 
 .drawio-page {
   margin: 0;
+}
+
+.drawio-meta {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.5rem 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.drawio-badge {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
 }
 
 .drawio-container {
