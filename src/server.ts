@@ -481,7 +481,10 @@ async function renderShellPage(projectId: string, worktreeParams: string, rootDi
   <div class="preview-layout">
     <nav id="preview-sidebar" class="preview-sidebar">${sidebarHtml}</nav>
     <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
-    <div id="preview-content" class="${contentClass}">${contentBody}</div>
+    <div class="preview-main-area">
+      <div id="tab-bar" class="tab-bar"></div>
+      <div id="preview-content" class="${contentClass}">${contentBody}</div>
+    </div>
   </div>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
   <script>
@@ -491,13 +494,197 @@ ${shellScript(projectId, worktreeParams, rootDir)}
 </html>`
 }
 
+const MAX_TABS = Math.max(Number(process.env.PREVIEW_MAX_TABS ?? "10"), 1)
+
 function shellScript(projectId: string, worktreeParams: string, rootDir: string): string {
   return `(function(){
   var projectId = ${JSON.stringify(projectId)};
   var worktreeParams = ${JSON.stringify(worktreeParams)};
   var rootDir = ${JSON.stringify(rootDir)};
+  var MAX_TABS = ${MAX_TABS};
   var content = document.getElementById("preview-content");
   var sidebar = document.getElementById("preview-sidebar");
+  var tabBar = document.getElementById("tab-bar");
+
+  var tabs = [];
+  var activeTabIndex = -1;
+  var tabIdSeed = 0;
+  var TAB_STORE_KEY = "preview-tabs:" + projectId + ":" + worktreeParams;
+
+  function baseName(file) {
+    if (!file) return "Untitled";
+    var parts = file.split("/");
+    return parts[parts.length - 1] || file;
+  }
+
+  function saveTabState() {
+    try {
+      var data = { tabs: tabs.map(function(t){ return { file: t.file, title: t.title }; }), active: activeTabIndex };
+      localStorage.setItem(TAB_STORE_KEY, JSON.stringify(data));
+    } catch(e) {}
+  }
+
+  function loadTabState() {
+    try {
+      var raw = localStorage.getItem(TAB_STORE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch(e) { return null; }
+  }
+
+  function renderTabBar() {
+    if (!tabBar) return;
+    tabBar.innerHTML = "";
+    tabs.forEach(function(tab, i) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "tab-item" + (i === activeTabIndex ? " active" : "");
+      btn.setAttribute("data-tab-index", String(i));
+
+      var name = document.createElement("span");
+      name.className = "tab-name";
+      name.textContent = baseName(tab.file);
+      name.title = tab.file || "Untitled";
+
+      var close = document.createElement("span");
+      close.className = "tab-close";
+      close.textContent = "\\u00d7";
+      close.setAttribute("data-tab-close", String(i));
+
+      btn.appendChild(name);
+      btn.appendChild(close);
+      tabBar.appendChild(btn);
+
+      btn.addEventListener("click", function(e) {
+        if (e.target.closest && e.target.closest(".tab-close")) return;
+        switchToTab(i);
+      });
+
+      close.addEventListener("click", function(e) {
+        e.stopPropagation();
+        closeTab(i);
+      });
+    });
+  }
+
+  function switchToTab(index) {
+    if (index < 0 || index >= tabs.length) return;
+    var prev = activeTabIndex;
+    if (prev >= 0 && prev < tabs.length && content) {
+      tabs[prev].cachedHtml = content.innerHTML;
+      tabs[prev].cachedClass = content.className;
+      tabs[prev].scrollTop = content.scrollTop || 0;
+    }
+    activeTabIndex = index;
+    var tab = tabs[index];
+    if (tab.cachedHtml !== undefined) {
+      content.className = tab.cachedClass || "preview-content";
+      content.innerHTML = tab.cachedHtml;
+      content.scrollTop = tab.scrollTop || 0;
+      content.querySelectorAll("pre code").forEach(function(b) { if (window.hljs) window.hljs.highlightElement(b); });
+      initToc();
+      initDrawio();
+      document.title = tab.title || "Preview";
+      updateSidebarActive(tab.file);
+      renderTabBar();
+      syncTabUrl();
+      saveTabState();
+    } else if (tab.file) {
+      loadTabContent(tab, true);
+    }
+  }
+
+  function loadTabContent(tab, doSwitch) {
+    var params = new URLSearchParams();
+    params.set("project", projectId);
+    params.set("file", tab.file);
+    if (worktreeParams) {
+      var wt = new URLSearchParams(worktreeParams);
+      wt.forEach(function(v, k) { params.set(k, v); });
+    }
+    var apiUrl = "/api/render?" + params.toString();
+    if (doSwitch) content.style.opacity = "0.5";
+    fetch(apiUrl).then(function(resp) {
+      if (!resp.ok) throw new Error(resp.status + "");
+      return resp.json();
+    }).then(function(data) {
+      tab.title = data.title || "Preview";
+      tab.cachedClass = data.contentClass || "preview-content";
+      tab.cachedHtml = data.body;
+      tab.scrollTop = 0;
+      if (tabs[activeTabIndex] === tab) {
+        content.className = tab.cachedClass;
+        content.innerHTML = tab.cachedHtml;
+        content.style.opacity = "";
+        content.querySelectorAll("pre code").forEach(function(b) { if (window.hljs) window.hljs.highlightElement(b); });
+        initToc();
+        initDrawio();
+        document.title = tab.title;
+        updateSidebarActive(tab.file);
+      }
+      renderTabBar();
+      syncTabUrl();
+      saveTabState();
+    }).catch(function() {
+      tab.cachedClass = "preview-content";
+      tab.cachedHtml = '<div class="browse-empty"><p>Failed to load content.</p></div>';
+      if (tabs[activeTabIndex] === tab) {
+        content.className = "preview-content";
+        content.innerHTML = tab.cachedHtml;
+        content.style.opacity = "";
+      }
+    });
+  }
+
+  function openTab(file) {
+    for (var i = 0; i < tabs.length; i++) {
+      if (tabs[i].file === file) {
+        switchToTab(i);
+        return;
+      }
+    }
+    if (tabs.length >= MAX_TABS) {
+      alert("Already " + MAX_TABS + " tabs open. Close one first.");
+      return;
+    }
+    var tab = { id: ++tabIdSeed, file: file, title: file || "Preview", cachedHtml: undefined, cachedClass: undefined, scrollTop: 0 };
+    tabs.push(tab);
+    activeTabIndex = tabs.length - 1;
+    renderTabBar();
+    loadTabContent(tab, true);
+  }
+
+  function closeTab(index) {
+    if (index < 0 || index >= tabs.length) return;
+    tabs.splice(index, 1);
+    if (tabs.length === 0) {
+      activeTabIndex = -1;
+      content.className = "preview-content";
+      content.innerHTML = '<div class="browse-empty"><p>Select a file from the sidebar to preview</p></div>';
+      document.title = "Preview";
+      updateSidebarActive("");
+      renderTabBar();
+      syncTabUrl();
+      saveTabState();
+      return;
+    }
+    if (activeTabIndex >= tabs.length) activeTabIndex = tabs.length - 1;
+    else if (activeTabIndex > index) activeTabIndex--;
+    switchToTab(activeTabIndex);
+  }
+
+  function syncTabUrl() {
+    var tab = tabs[activeTabIndex];
+    var params = new URLSearchParams(window.location.search);
+    params.set("project", projectId);
+    if (tab && tab.file) {
+      params.set("file", tab.file);
+      history.replaceState(null, "", "/preview?" + params.toString());
+    } else {
+      params.delete("file");
+      history.replaceState(null, "", "/browse?" + params.toString());
+    }
+  }
 
   // --- sidebar resize ---
   (function() {
@@ -579,11 +766,6 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
   })();
 
   // --- SPA router ---
-  function currentFile() {
-    var params = new URLSearchParams(window.location.search);
-    return params.get("file") || "";
-  }
-
   function updateSidebarActive(file) {
     sidebar.querySelectorAll("a.file-link.active").forEach(function(a) { a.classList.remove("active"); });
     if (!file) return;
@@ -598,34 +780,6 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     });
   }
 
-  function loadContent(url, pushState) {
-    var u = new URL(url, window.location.origin);
-    var pathname = u.pathname;
-    var params = u.searchParams;
-    var file = params.get("file") || "";
-    var apiUrl = "/api/render" + u.search;
-    content.style.opacity = "0.5";
-    fetch(apiUrl).then(function(resp) {
-      if (!resp.ok) throw new Error(resp.status + "");
-      return resp.json();
-    }).then(function(data) {
-      document.title = data.title || "Preview";
-      content.className = data.contentClass || "preview-content";
-      content.innerHTML = data.body;
-      content.style.opacity = "";
-      content.querySelectorAll("pre code").forEach(function(b) { if (window.hljs) window.hljs.highlightElement(b); });
-      initToc();
-      initDrawio();
-      updateSidebarActive(file);
-      if (pushState) history.pushState(null, "", url);
-    }).catch(function() {
-      content.innerHTML = '<div class="browse-empty"><p>Failed to load content.</p></div>';
-      content.style.opacity = "";
-    });
-  }
-
-  function navigate(url) { loadContent(url, true); }
-
   // intercept all sidebar and content link clicks
   document.addEventListener("click", function(e) {
     var a = e.target.closest ? e.target.closest("a[href]") : null;
@@ -634,11 +788,19 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     if (!href || href.startsWith("http") || href.startsWith("#") || a.target === "_blank") return;
     if (href.startsWith("/preview?") || href.startsWith("/browse?")) {
       e.preventDefault();
-      navigate(href);
+      var u = new URL(href, window.location.origin);
+      var file = u.searchParams.get("file") || "";
+      if (file) {
+        openTab(file);
+      }
     }
   });
 
-  window.addEventListener("popstate", function() { loadContent(window.location.pathname + window.location.search, false); });
+  window.addEventListener("popstate", function() {
+    var params = new URLSearchParams(window.location.search);
+    var file = params.get("file") || "";
+    if (file) openTab(file);
+  });
 
   // --- live reload WebSocket ---
   (function() {
@@ -648,8 +810,12 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       var protocol = window.location.protocol === "https:" ? "wss" : "ws";
       socket = new WebSocket(protocol + "://" + window.location.host + "/ws?" + wsParams);
       socket.onmessage = function() {
-        var file = currentFile();
-        if (file) loadContent(window.location.pathname + window.location.search, false);
+        tabs.forEach(function(tab) {
+          if (tab.file) {
+            var isActive = tabs[activeTabIndex] === tab;
+            loadTabContent(tab, isActive);
+          }
+        });
       };
       socket.onclose = function() { clearTimeout(timer); timer = setTimeout(connect, 1000); };
     }
@@ -699,14 +865,49 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     }
   }
 
-  // --- initial content ---
-  if (content.innerHTML.trim()) {
-    content.querySelectorAll("pre code").forEach(function(b) { if (window.hljs) window.hljs.highlightElement(b); });
-    initToc();
-    initDrawio();
-  } else {
-    loadContent(window.location.pathname + window.location.search, false);
-  }
+  // --- initial content: hydrate tabs ---
+  (function() {
+    var params = new URLSearchParams(window.location.search);
+    var initialFile = params.get("file") || "";
+    var saved = loadTabState();
+
+    if (initialFile) {
+      var tab = { id: ++tabIdSeed, file: initialFile, title: initialFile, cachedHtml: content.innerHTML.trim() ? content.innerHTML : undefined, cachedClass: content.innerHTML.trim() ? content.className : undefined, scrollTop: 0 };
+      if (saved && saved.tabs && saved.tabs.length > 0) {
+        tabs = saved.tabs.map(function(t) { return { id: ++tabIdSeed, file: t.file, title: t.title || t.file, cachedHtml: undefined, cachedClass: undefined, scrollTop: 0 }; });
+        var found = -1;
+        for (var i = 0; i < tabs.length; i++) { if (tabs[i].file === initialFile) { found = i; break; } }
+        if (found >= 0) {
+          tabs[found].cachedHtml = tab.cachedHtml;
+          tabs[found].cachedClass = tab.cachedClass;
+          activeTabIndex = found;
+        } else {
+          tabs.push(tab);
+          activeTabIndex = tabs.length - 1;
+        }
+      } else {
+        tabs = [tab];
+        activeTabIndex = 0;
+      }
+      if (tab.cachedHtml) {
+        content.querySelectorAll("pre code").forEach(function(b) { if (window.hljs) window.hljs.highlightElement(b); });
+        initToc();
+        initDrawio();
+      }
+      renderTabBar();
+      updateSidebarActive(initialFile);
+      saveTabState();
+    } else if (saved && saved.tabs && saved.tabs.length > 0) {
+      tabs = saved.tabs.map(function(t) { return { id: ++tabIdSeed, file: t.file, title: t.title || t.file, cachedHtml: undefined, cachedClass: undefined, scrollTop: 0 }; });
+      activeTabIndex = Math.min(Math.max(saved.active || 0, 0), tabs.length - 1);
+      renderTabBar();
+      if (tabs[activeTabIndex] && tabs[activeTabIndex].file) {
+        loadTabContent(tabs[activeTabIndex], true);
+      }
+    } else {
+      renderTabBar();
+    }
+  })();
 })();`
 }
 
