@@ -381,6 +381,9 @@ function buildSyntheticUntrackedDiff(filePath: string, content: string): string 
 }
 
 async function gitDiff(rootDir: string, filePath: string): Promise<string> {
+  // Validate path for ALL files (tracked and untracked) to prevent path traversal
+  const absolutePath = ensureInsideRoot(rootDir, filePath)
+
   const statusResult = await runGit(rootDir, ["status", "--porcelain=v1", "-uall", "--", filePath])
   if (statusResult.code !== 0) {
     throw new Error(statusResult.stderr || "Failed to query git status")
@@ -389,7 +392,6 @@ async function gitDiff(rootDir: string, filePath: string): Promise<string> {
   const statusLine = statusResult.stdout.split(/\r?\n/).find((line) => line.trim().length > 0)
   const parsed = statusLine ? parsePorcelainLine(statusLine) : null
   if (parsed?.status === "?") {
-    const absolutePath = ensureInsideRoot(rootDir, filePath)
     const content = await readFile(absolutePath, "utf-8")
     return buildSyntheticUntrackedDiff(filePath, content)
   }
@@ -1076,7 +1078,8 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     }
   }
 
-  function refreshChangesList() {
+  var _refreshTimer = null;
+  function _doRefreshChanges() {
     var params = new URLSearchParams();
     params.set("project", projectId);
     if (worktreeParams) {
@@ -1089,6 +1092,14 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     }).then(function(data) {
       updateChangesSidebar(data.files || []);
     }).catch(function() {});
+  }
+  function refreshChangesList(immediate) {
+    if (immediate) { _doRefreshChanges(); return; }
+    if (_refreshTimer) clearTimeout(_refreshTimer);
+    _refreshTimer = setTimeout(function() {
+      _refreshTimer = null;
+      _doRefreshChanges();
+    }, 300);
   }
 
   // intercept all sidebar and content link clicks
@@ -1131,7 +1142,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       var protocol = window.location.protocol === "https:" ? "wss" : "ws";
       socket = new WebSocket(protocol + "://" + window.location.host + "/ws?" + wsParams);
       socket.onmessage = function() {
-        refreshChangesList();
+    refreshChangesList(true);
         tabs.forEach(function(tab) {
           if (tab.file) {
             var isActive = tabs[activeTabIndex] === tab;
