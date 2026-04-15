@@ -346,6 +346,64 @@ function parsePorcelainLine(line: string): GitFileStatus | null {
   }
 }
 
+// --- Git log (commit history) ---
+
+interface GitCommitInfo {
+  hash: string
+  shortHash: string
+  message: string
+  author: string
+  date: string
+  branch: string | null
+  tags: string[]
+}
+
+function parseDecorateRefs(decorate: string): { branch: string | null; tags: string[] } {
+  if (!decorate) return { branch: null, tags: [] }
+  const parts = decorate.split(",").map((s) => s.trim())
+  let branch: string | null = null
+  const tags: string[] = []
+  for (const part of parts) {
+    if (part.startsWith("HEAD -> ")) {
+      branch = part.slice("HEAD -> ".length)
+    } else if (part.startsWith("tag: ")) {
+      tags.push(part.slice("tag: ".length))
+    }
+  }
+  return { branch, tags }
+}
+
+async function gitLog(rootDir: string, count = 50): Promise<GitCommitInfo[]> {
+  const SEP = "---GIT-RECORD-SEP---"
+  const format = `%H%n%h%n%s%n%an%n%aI%n%D%n${SEP}`
+  const result = await runGit(rootDir, ["log", `--format=${format}`, `-n`, String(count)])
+  if (result.code !== 0) return []
+
+  const commits: GitCommitInfo[] = []
+  const records = result.stdout.split(SEP).filter((r) => r.trim())
+  for (const record of records) {
+    const lines = record.trim().split("\n")
+    if (lines.length < 5) continue
+    const [hash, shortHash, message, author, date, ...decorateLines] = lines
+    const decorate = decorateLines.join(",").trim()
+    const { branch, tags } = parseDecorateRefs(decorate)
+    commits.push({ hash, shortHash, message, author, date, branch, tags })
+  }
+  return commits
+}
+
+async function gitShow(rootDir: string, commitHash: string): Promise<string> {
+  // Validate hash to prevent injection (only hex chars allowed)
+  if (!/^[0-9a-f]{4,40}$/i.test(commitHash)) {
+    throw new Error("Invalid commit hash")
+  }
+  const result = await runGit(rootDir, ["show", "--format=", commitHash])
+  if (result.code !== 0) {
+    throw new Error(result.stderr || "Failed to get commit diff")
+  }
+  return result.stdout
+}
+
 async function gitStatus(rootDir: string): Promise<GitFileStatus[]> {
   const result = await runGit(rootDir, ["status", "--porcelain=v1", "-uall"])
   if (result.code !== 0) return []
@@ -595,9 +653,11 @@ async function renderSidebarHtml(
   <div class="sidebar-tabs" id="sidebar-tabs">
     <button class="sidebar-tab${defaultTab === "files" ? " active" : ""}" data-tab="files" type="button">Files</button>
     <button class="sidebar-tab${defaultTab === "changes" ? " active" : ""}" data-tab="changes" type="button">Changes <span class="changes-count">${changesSidebar.count}</span></button>
+    <button class="sidebar-tab" data-tab="commits" type="button">Commits</button>
   </div>
   <div class="sidebar-panel${defaultTab === "files" ? " active" : ""}" data-panel="files">${treeHtml}</div>
-  <div class="sidebar-panel${defaultTab === "changes" ? " active" : ""}" data-panel="changes">${changesHtml}</div>`
+  <div class="sidebar-panel${defaultTab === "changes" ? " active" : ""}" data-panel="changes">${changesHtml}</div>
+  <div class="sidebar-panel" data-panel="commits"><div class="sidebar-loading commits-placeholder">Click to load commits</div></div>`
 }
 
 function changeStatusClass(status: string): string {
@@ -728,7 +788,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
 
       var name = document.createElement("span");
       name.className = "tab-name";
-      name.textContent = baseName(tab.file) + (tab.view === "diff" ? " (diff)" : "");
+      name.textContent = (tab.view === "commit" ? tab.file.slice(0, 8) : baseName(tab.file)) + (tab.view === "diff" ? " (diff)" : tab.view === "commit" ? " (commit)" : "");
       name.title = tab.file || "Untitled";
 
       var close = document.createElement("span");
@@ -782,12 +842,18 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
   function loadTabContent(tab, doSwitch) {
     var params = new URLSearchParams();
     params.set("project", projectId);
-    params.set("file", tab.file);
     if (worktreeParams) {
       var wt = new URLSearchParams(worktreeParams);
       wt.forEach(function(v, k) { params.set(k, v); });
     }
-    var apiUrl = (tab.view === "diff" ? "/api/render/diff?" : "/api/render?") + params.toString();
+    var apiUrl;
+    if (tab.view === "commit") {
+      params.set("commit", tab.file);
+      apiUrl = "/api/render/commit?" + params.toString();
+    } else {
+      params.set("file", tab.file);
+      apiUrl = (tab.view === "diff" ? "/api/render/diff?" : "/api/render?") + params.toString();
+    }
     if (doSwitch) content.style.opacity = "0.5";
     fetch(apiUrl).then(function(resp) {
       if (!resp.ok) throw new Error(resp.status + "");
@@ -857,6 +923,24 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     loadTabContent(tab, true);
   }
 
+  function openCommitTab(hash) {
+    for (var i = 0; i < tabs.length; i++) {
+      if (tabs[i].file === hash && (tabs[i].view || "file") === "commit") {
+        switchToTab(i);
+        return;
+      }
+    }
+    if (tabs.length >= MAX_TABS) {
+      alert("Already " + MAX_TABS + " tabs open. Close one first.");
+      return;
+    }
+    var tab = { id: ++tabIdSeed, file: hash, view: "commit", title: hash.slice(0, 8) + " (commit)", cachedHtml: undefined, cachedClass: undefined, scrollTop: 0 };
+    tabs.push(tab);
+    activeTabIndex = tabs.length - 1;
+    renderTabBar();
+    loadTabContent(tab, true);
+  }
+
   function closeTab(index) {
     if (index < 0 || index >= tabs.length) return;
     tabs.splice(index, 1);
@@ -881,17 +965,22 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     var params = new URLSearchParams(window.location.search);
     params.set("project", projectId);
     if (tab && tab.file) {
-      if ((tab.view || "file") === "diff") {
-        params.delete("file");
+      var view = tab.view || "file";
+      params.delete("file");
+      params.delete("diff");
+      params.delete("commit");
+      if (view === "diff") {
         params.set("diff", tab.file);
+      } else if (view === "commit") {
+        params.set("commit", tab.file);
       } else {
-        params.delete("diff");
         params.set("file", tab.file);
       }
       history.replaceState(null, "", "/preview?" + params.toString());
     } else {
       params.delete("file");
       params.delete("diff");
+      params.delete("commit");
       history.replaceState(null, "", "/browse?" + params.toString());
     }
   }
@@ -956,10 +1045,116 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       btn.addEventListener("click", function() {
         var name = btn.getAttribute("data-tab") || "files";
         setSidebarTab(name);
+        if (name === "commits") loadCommitsList();
       });
     });
     sidebar.__setSidebarTab = setSidebarTab;
   })();
+
+  var _commitsLoaded = false;
+  function loadCommitsList() {
+    if (_commitsLoaded) return;
+    _commitsLoaded = true;
+    var panel = sidebar.querySelector('.sidebar-panel[data-panel="commits"]');
+    if (!panel) return;
+    panel.innerHTML = '<div class="sidebar-loading">Loading commits...</div>';
+    var params = new URLSearchParams();
+    params.set("project", projectId);
+    if (worktreeParams) {
+      var wt = new URLSearchParams(worktreeParams);
+      wt.forEach(function(v, k) { params.set(k, v); });
+    }
+    fetch("/api/git/log?" + params.toString()).then(function(resp) {
+      if (!resp.ok) throw new Error(resp.status + "");
+      return resp.json();
+    }).then(function(data) {
+      renderCommitsList(panel, data.commits || []);
+    }).catch(function() {
+      panel.innerHTML = '<div class="sidebar-loading">Failed to load commits.</div>';
+      _commitsLoaded = false;
+    });
+  }
+
+  function formatCommitDate(isoStr) {
+    try {
+      var d = new Date(isoStr);
+      var now = new Date();
+      var diffMs = now - d;
+      var diffMin = Math.floor(diffMs / 60000);
+      if (diffMin < 1) return "just now";
+      if (diffMin < 60) return diffMin + "m ago";
+      var diffHr = Math.floor(diffMin / 60);
+      if (diffHr < 24) return diffHr + "h ago";
+      var diffDay = Math.floor(diffHr / 24);
+      if (diffDay < 30) return diffDay + "d ago";
+      return d.toLocaleDateString();
+    } catch(e) { return isoStr; }
+  }
+
+  function renderCommitsList(panel, commits) {
+    if (!commits.length) {
+      panel.innerHTML = '<div class="sidebar-loading">No commits found.</div>';
+      return;
+    }
+    var list = document.createElement("ul");
+    list.className = "commits-list";
+    commits.forEach(function(c) {
+      var li = document.createElement("li");
+      li.className = "commit-item";
+
+      var a = document.createElement("a");
+      a.className = "commit-link";
+      a.href = "#";
+      a.setAttribute("data-commit-hash", c.hash);
+
+      var topRow = document.createElement("div");
+      topRow.className = "commit-top-row";
+
+      var hashBadge = document.createElement("span");
+      hashBadge.className = "commit-hash-badge";
+      hashBadge.textContent = c.shortHash;
+      topRow.appendChild(hashBadge);
+
+      if (c.branch) {
+        var branchBadge = document.createElement("span");
+        branchBadge.className = "commit-branch-badge";
+        branchBadge.textContent = c.branch;
+        topRow.appendChild(branchBadge);
+      }
+      if (c.tags && c.tags.length) {
+        c.tags.forEach(function(tag) {
+          var tagBadge = document.createElement("span");
+          tagBadge.className = "commit-tag-badge";
+          tagBadge.textContent = tag;
+          topRow.appendChild(tagBadge);
+        });
+      }
+
+      var msg = document.createElement("div");
+      msg.className = "commit-message";
+      msg.textContent = c.message;
+
+      var meta = document.createElement("div");
+      meta.className = "commit-meta";
+      meta.textContent = c.author + " \u00b7 " + formatCommitDate(c.date);
+
+      a.appendChild(topRow);
+      a.appendChild(msg);
+      a.appendChild(meta);
+      li.appendChild(a);
+      list.appendChild(li);
+    });
+    panel.innerHTML = "";
+    panel.appendChild(list);
+  }
+
+  sidebar.addEventListener("click", function(e) {
+    var link = e.target.closest ? e.target.closest("a[data-commit-hash]") : null;
+    if (!link) return;
+    e.preventDefault();
+    var hash = link.getAttribute("data-commit-hash");
+    if (hash) openCommitTab(hash);
+  });
 
   // --- worktree dropdown ---
   (function() {
@@ -1008,6 +1203,18 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       sidebar.querySelectorAll("a.change-link").forEach(function(a) {
         var diffPath = a.getAttribute("data-diff-path");
         if (diffPath === file) {
+          a.classList.add("active");
+          a.scrollIntoView({ block: "nearest", behavior: "instant" });
+        }
+      });
+      return;
+    }
+    if (view === "commit") {
+      if (sidebar.__setSidebarTab) sidebar.__setSidebarTab("commits");
+      loadCommitsList();
+      sidebar.querySelectorAll("a.commit-link").forEach(function(a) {
+        a.classList.remove("active");
+        if (a.getAttribute("data-commit-hash") === file) {
           a.classList.add("active");
           a.scrollIntoView({ block: "nearest", behavior: "instant" });
         }
@@ -1113,6 +1320,11 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       var u = new URL(href, window.location.origin);
       var file = u.searchParams.get("file") || "";
       var diff = u.searchParams.get("diff") || "";
+      var commitParam = u.searchParams.get("commit") || "";
+      if (commitParam) {
+        openCommitTab(commitParam);
+        return;
+      }
       if (diff) {
         openDiffTab(diff);
         return;
@@ -1127,6 +1339,11 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     var params = new URLSearchParams(window.location.search);
     var file = params.get("file") || "";
     var diff = params.get("diff") || "";
+    var commitParam = params.get("commit") || "";
+    if (commitParam) {
+      openCommitTab(commitParam);
+      return;
+    }
     if (diff) {
       openDiffTab(diff);
       return;
@@ -1203,11 +1420,12 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     var params = new URLSearchParams(window.location.search);
     var initialFile = params.get("file") || "";
     var initialDiff = params.get("diff") || "";
+    var initialCommit = params.get("commit") || "";
     var saved = loadTabState();
 
-    if (initialFile || initialDiff) {
-      var initialView = initialDiff ? "diff" : "file";
-      var initialPath = initialDiff || initialFile;
+    if (initialFile || initialDiff || initialCommit) {
+      var initialView = initialCommit ? "commit" : initialDiff ? "diff" : "file";
+      var initialPath = initialCommit || initialDiff || initialFile;
       var tab = { id: ++tabIdSeed, file: initialPath, view: initialView, title: initialPath, cachedHtml: content.innerHTML.trim() ? content.innerHTML : undefined, cachedClass: content.innerHTML.trim() ? content.className : undefined, scrollTop: 0 };
       if (saved && saved.tabs && saved.tabs.length > 0) {
         tabs = saved.tabs.map(function(t) { return { id: ++tabIdSeed, file: t.file, view: t.view || "file", title: t.title || t.file, cachedHtml: undefined, cachedClass: undefined, scrollTop: 0 }; });
@@ -1636,6 +1854,44 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
     return
   }
 
+  if (pathname === "/api/git/log") {
+    const count = Math.min(Math.max(Number(url.searchParams.get("count") ?? "50"), 1), 200)
+    const commits = await gitLog(rootDir, count)
+    sendJson(res, { commits })
+    return
+  }
+
+  if (pathname === "/api/git/show") {
+    const commit = url.searchParams.get("commit") || ""
+    if (!commit) {
+      sendResponse(res, 400, "Missing commit query parameter")
+      return
+    }
+    try {
+      const diff = await gitShow(rootDir, commit)
+      sendJson(res, { diff, commit })
+    } catch {
+      sendJson(res, { diff: "", commit }, 500)
+    }
+    return
+  }
+
+  if (pathname === "/api/render/commit") {
+    const commit = url.searchParams.get("commit") || ""
+    if (!commit) {
+      sendJson(res, { title: "Error", body: '<div class="browse-empty"><p>Missing commit parameter.</p></div>', contentClass: "preview-content" }, 400)
+      return
+    }
+    try {
+      const diff = await gitShow(rootDir, commit)
+      const body = renderDiffBody(diff, commit)
+      sendJson(res, { title: `${commit.slice(0, 8)} (commit)`, body, contentClass: "preview-content" })
+    } catch {
+      sendJson(res, { title: "Error", body: '<div class="browse-empty"><p>Failed to load commit.</p></div>', contentClass: "preview-content" }, 500)
+    }
+    return
+  }
+
   // Raw file API
   if (pathname === "/api/file") {
     const relativePath = url.searchParams.get("path")
@@ -1665,10 +1921,22 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
   if (pathname === "/preview") {
     const relativePath = url.searchParams.get("file") || ""
     const diffPath = url.searchParams.get("diff") || ""
+    const commitHash = url.searchParams.get("commit") || ""
     const sidebarHtml = await renderSidebarHtml(projectId, wtParams, relativePath, diffPath, projectRootDir, rootDir)
-    const initialContent = diffPath
-      ? await renderDiffContent(rootDir, diffPath)
-      : await renderContent(projectId, rootDir, wtParams, relativePath || null)
+    let initialContent: RenderResult
+    if (commitHash) {
+      try {
+        const diff = await gitShow(rootDir, commitHash)
+        const body = renderDiffBody(diff, commitHash)
+        initialContent = { title: `${commitHash.slice(0, 8)} (commit)`, body, contentClass: "preview-content" }
+      } catch {
+        initialContent = { title: "Error", body: '<div class="browse-empty"><p>Failed to load commit.</p></div>', contentClass: "preview-content" }
+      }
+    } else if (diffPath) {
+      initialContent = await renderDiffContent(rootDir, diffPath)
+    } else {
+      initialContent = await renderContent(projectId, rootDir, wtParams, relativePath || null)
+    }
     sendResponse(res, 200, await renderShellPage(projectId, wtParams, rootDir, sidebarHtml, initialContent), {
       "content-type": "text/html; charset=utf-8",
     })

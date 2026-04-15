@@ -1324,3 +1324,105 @@ button:hover {
   color: var(--primary);
   font-weight: 600;
 }
+
+.commits-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+}
+
+.commit-item {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.commit-link {
+  display: block;
+  text-decoration: none;
+  padding: 0.45rem 0.5rem;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  transition: background 0.1s;
+}
+
+.commit-link:hover {
+  background: var(--list-hover);
+  color: var(--text);
+}
+
+.commit-link.active {
+  background: var(--list-active);
+}
+
+.commit-top-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.commit-hash-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #7c3aed;
+  background: color-mix(in srgb, #7c3aed 14%, transparent);
+  flex-shrink: 0;
+}
+
+.commit-branch-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #1a7f37;
+  background: color-mix(in srgb, #2ea043 16%, transparent);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-tag-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #b35a00;
+  background: color-mix(in srgb, #d97706 16%, transparent);
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-message {
+  margin-top: 0.2rem;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.commit-meta {
+  margin-top: 0.15rem;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commits-placeholder {
+  cursor: pointer;
+}
