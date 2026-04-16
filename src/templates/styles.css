@@ -1325,6 +1325,60 @@ button:hover {
   font-weight: 600;
 }
 
+.diff-commit-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  padding: 0.5rem 0 1rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.diff-file-count {
+  opacity: 0.8;
+  font-size: 0.8rem;
+}
+
+.diff-file-section {
+  margin-bottom: 1.5rem;
+}
+
+.diff-file-section:last-child {
+  margin-bottom: 0;
+}
+
+.diff-commit-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0 0 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.diff-commit-author {
+  font-weight: 500;
+}
+
+.diff-commit-date {
+  opacity: 0.8;
+}
+
+.diff-commit-message {
+  margin: 0 0 1.25rem;
+  padding: 0.75rem 1rem;
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
 .commits-list {
   list-style: none;
   margin: 0;

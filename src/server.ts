@@ -6,7 +6,7 @@ import { WebSocket, WebSocketServer } from "ws"
 
 import { renderCodeBody } from "./renderers/code"
 import { renderCsvBody } from "./renderers/csv"
-import { renderDiffBody } from "./renderers/diff"
+import { renderCommitDiff, renderDiffBody } from "./renderers/diff"
 import { countDiagramPages } from "./renderers/drawio"
 import { renderHtmlBody } from "./renderers/html"
 import { renderMarkdownBody } from "./renderers/markdown"
@@ -392,16 +392,34 @@ async function gitLog(rootDir: string, count = 50): Promise<GitCommitInfo[]> {
   return commits
 }
 
-async function gitShow(rootDir: string, commitHash: string): Promise<string> {
-  // Validate hash to prevent injection (only hex chars allowed)
+interface CommitDetail {
+  hash: string
+  author: string
+  date: string
+  message: string
+  diff: string
+}
+
+async function gitShow(rootDir: string, commitHash: string): Promise<CommitDetail> {
   if (!/^[0-9a-f]{4,40}$/i.test(commitHash)) {
     throw new Error("Invalid commit hash")
   }
-  const result = await runGit(rootDir, ["show", "--format=", commitHash])
+  const BODY_SEP = "---COMMIT-BODY-END---"
+  const format = `%H%n%an <%ae>%n%aI%n%B${BODY_SEP}`
+  const result = await runGit(rootDir, ["show", `--format=${format}`, commitHash])
   if (result.code !== 0) {
     throw new Error(result.stderr || "Failed to get commit diff")
   }
-  return result.stdout
+  const raw = result.stdout
+  const sepIdx = raw.indexOf(BODY_SEP)
+  const metaBlock = sepIdx === -1 ? raw : raw.slice(0, sepIdx)
+  const diff = sepIdx === -1 ? "" : raw.slice(sepIdx + BODY_SEP.length)
+  const metaLines = metaBlock.split("\n")
+  const hash = metaLines[0] || commitHash
+  const author = metaLines[1] || ""
+  const date = metaLines[2] || ""
+  const message = metaLines.slice(3).join("\n").trim()
+  return { hash, author, date, message, diff }
 }
 
 async function gitStatus(rootDir: string): Promise<GitFileStatus[]> {
@@ -1868,8 +1886,8 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
       return
     }
     try {
-      const diff = await gitShow(rootDir, commit)
-      sendJson(res, { diff, commit })
+      const detail = await gitShow(rootDir, commit)
+      sendJson(res, { diff: detail.diff, commit, hash: detail.hash, author: detail.author, date: detail.date, message: detail.message })
     } catch {
       sendJson(res, { diff: "", commit }, 500)
     }
@@ -1883,8 +1901,8 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
       return
     }
     try {
-      const diff = await gitShow(rootDir, commit)
-      const body = renderDiffBody(diff, commit)
+      const detail = await gitShow(rootDir, commit)
+      const body = renderCommitDiff(detail.diff, { hash: detail.hash, author: detail.author, date: detail.date, message: detail.message })
       sendJson(res, { title: `${commit.slice(0, 8)} (commit)`, body, contentClass: "preview-content" })
     } catch {
       sendJson(res, { title: "Error", body: '<div class="browse-empty"><p>Failed to load commit.</p></div>', contentClass: "preview-content" }, 500)
@@ -1926,8 +1944,8 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
     let initialContent: RenderResult
     if (commitHash) {
       try {
-        const diff = await gitShow(rootDir, commitHash)
-        const body = renderDiffBody(diff, commitHash)
+        const detail = await gitShow(rootDir, commitHash)
+        const body = renderCommitDiff(detail.diff, { hash: detail.hash, author: detail.author, date: detail.date, message: detail.message })
         initialContent = { title: `${commitHash.slice(0, 8)} (commit)`, body, contentClass: "preview-content" }
       } catch {
         initialContent = { title: "Error", body: '<div class="browse-empty"><p>Failed to load commit.</p></div>', contentClass: "preview-content" }
