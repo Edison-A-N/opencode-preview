@@ -790,6 +790,38 @@ button:hover {
   letter-spacing: 0.03em;
 }
 
+.fm-card {
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 15%, transparent);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0 1.5rem;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.fm-row {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.15rem 0;
+}
+.fm-key {
+  color: var(--muted);
+  min-width: 6em;
+  flex-shrink: 0;
+  font-weight: 500;
+}
+.fm-key::after { content: ":"; }
+.fm-val { color: var(--fg); }
+.fm-tag {
+  display: inline-block;
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--primary);
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  margin-right: 0.3rem;
+}
+
 .markdown-body {
   max-width: 860px;
   margin: 0 auto;

@@ -16,19 +16,59 @@ function readingTime(words: number): string {
   return `${minutes} min read`
 }
 
-function stripFrontMatter(raw: string): { body: string; meta: Record<string, string> } {
+type FrontMatter = Record<string, string | string[]>
+
+function stripFrontMatter(raw: string): { body: string; meta: FrontMatter } {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
   if (!match) return { body: raw, meta: {} }
-  const meta: Record<string, string> = {}
-  for (const line of match[1].split("\n")) {
+  const meta: FrontMatter = {}
+  let currentKey = ""
+  let currentVal = ""
+  const lines = match[1].split("\n")
+
+  for (const line of lines) {
+    if (/^\s+-\s+/.test(line)) {
+      const item = line.replace(/^\s+-\s+/, "").trim()
+      if (currentKey) {
+        const prev = meta[currentKey]
+        meta[currentKey] = Array.isArray(prev) ? [...prev, item] : prev ? [prev, item] : [item]
+      }
+      continue
+    }
+    if (/^\s+/.test(line) && currentKey) {
+      const trimmed = line.trim()
+      if (trimmed) {
+        const prev = meta[currentKey]
+        meta[currentKey] = typeof prev === "string" && prev
+          ? `${prev} ${trimmed}`
+          : trimmed
+      }
+      continue
+    }
     const idx = line.indexOf(":")
     if (idx > 0) {
-      const key = line.slice(0, idx).trim()
-      const val = line.slice(idx + 1).trim()
-      if (key && val) meta[key] = val
+      currentKey = line.slice(0, idx).trim()
+      currentVal = line.slice(idx + 1).trim()
+      if (currentVal && currentVal !== ">-" && currentVal !== "|") {
+        meta[currentKey] = currentVal
+      }
     }
   }
   return { body: match[2], meta }
+}
+
+function renderFrontMatterCard(meta: FrontMatter): string {
+  const entries = Object.entries(meta).filter(([k]) => k !== "title")
+  if (entries.length === 0) return ""
+
+  const rows = entries.map(([key, val]) => {
+    const rendered = Array.isArray(val)
+      ? val.map((v) => `<span class="fm-tag">${v}</span>`).join(" ")
+      : val
+    return `<div class="fm-row"><span class="fm-key">${key}</span><span class="fm-val">${rendered}</span></div>`
+  }).join("\n")
+
+  return `<div class="fm-card">${rows}</div>`
 }
 
 export async function renderMarkdownBody(content: string): Promise<string> {
@@ -39,6 +79,7 @@ export async function renderMarkdownBody(content: string): Promise<string> {
   const title = meta.title
     ? `<h1 class="frontmatter-title">${meta.title}</h1>`
     : ""
+  const card = renderFrontMatterCard(meta)
 
   return `<main class="markdown-body">
   <div class="markdown-meta">
@@ -46,6 +87,7 @@ export async function renderMarkdownBody(content: string): Promise<string> {
     <span>${words} words &middot; ${lines} lines &middot; ${readingTime(words)}</span>
   </div>
   ${title}
+  ${card}
   ${html}
 </main>`
 }
