@@ -812,15 +812,6 @@ button:hover {
 }
 .fm-key::after { content: ":"; }
 .fm-val { color: var(--fg); }
-.fm-tag {
-  display: inline-block;
-  background: color-mix(in srgb, var(--primary) 10%, transparent);
-  color: var(--primary);
-  padding: 0.1rem 0.45rem;
-  border-radius: 4px;
-  font-size: 0.78rem;
-  margin-right: 0.3rem;
-}
 
 .markdown-body {
   max-width: 860px;
