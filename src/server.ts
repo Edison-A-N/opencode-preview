@@ -1043,7 +1043,8 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     if (activeLink) { var el = activeLink.closest("details"); while (el) { el.open = true; el = el.parentElement ? el.parentElement.closest("details") : null; } }
   }
   restoreFolderState();
-  sidebar.addEventListener("toggle", function(e) { if (e.target && e.target.tagName === "DETAILS") saveFolderState(); }, true);
+  var _isSearching = false;
+  sidebar.addEventListener("toggle", function(e) { if (!_isSearching && e.target && e.target.tagName === "DETAILS") saveFolderState(); }, true);
 
   // --- file search / filter ---
   (function() {
@@ -1061,6 +1062,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     var _priorFolderState = null;
 
     function filterFileTree(query) {
+      _isSearching = true;
       var allItems = filesPanel.querySelectorAll("li.file-item");
       var allFolders = filesPanel.querySelectorAll("li.folder-item");
       if (!query) {
@@ -1072,6 +1074,8 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
           });
           _priorFolderState = null;
         }
+        _isSearching = false;
+        saveFolderState();
         return;
       }
       if (!_priorFolderState) {
