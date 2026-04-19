@@ -1086,13 +1086,12 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
         var filePath = link ? (link.getAttribute("data-tooltip") || "").toLowerCase() : "";
         var fileName = filePath.split("/").pop() || "";
         var matched = filePath.includes(lowerQuery) || fuzzyMatch(fileName, lowerQuery);
-        li.style.display = matched ? "" : "none";
-        if (matched) matchedFiles.add(li);
+        if (matched) { li.classList.remove("search-hidden"); matchedFiles.add(li); }
+        else { li.classList.add("search-hidden"); }
       });
-      // Second pass: show folders that contain matches, expand them
       allFolders.forEach(function(li) {
-        var hasVisible = li.querySelector("li.file-item:not([style*='display: none'])");
-        li.style.display = hasVisible ? "" : "none";
+        var hasVisible = matchedFiles.size > 0 && li.querySelector("li.file-item:not(.search-hidden)");
+        if (hasVisible) { li.classList.remove("search-hidden"); } else { li.classList.add("search-hidden"); }
         var details = li.querySelector(":scope > details");
         if (details && hasVisible) details.open = true;
       });

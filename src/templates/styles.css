@@ -1202,6 +1202,10 @@ button:hover {
   line-height: 1.4;
 }
 
+.search-hidden {
+  display: none !important;
+}
+
 .changes-list {
   list-style: none;
   margin: 0;
