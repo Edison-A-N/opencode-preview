@@ -1058,15 +1058,27 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       kbdHint.textContent = "⌘ P";
     }
 
+    var _priorFolderState = null;
+
     function filterFileTree(query) {
       var allItems = filesPanel.querySelectorAll("li.file-item");
       var allFolders = filesPanel.querySelectorAll("li.folder-item");
       if (!query) {
-        // Reset: show everything, restore saved folder state
-        allItems.forEach(function(li) { li.style.display = ""; });
-        allFolders.forEach(function(li) { li.style.display = ""; });
-        restoreFolderState();
+        allItems.forEach(function(li) { li.classList.remove("search-hidden"); });
+        allFolders.forEach(function(li) { li.classList.remove("search-hidden"); });
+        if (_priorFolderState) {
+          filesPanel.querySelectorAll("details[data-folder-path]").forEach(function(d) {
+            d.open = !!_priorFolderState[d.getAttribute("data-folder-path")];
+          });
+          _priorFolderState = null;
+        }
         return;
+      }
+      if (!_priorFolderState) {
+        _priorFolderState = {};
+        filesPanel.querySelectorAll("details[data-folder-path]").forEach(function(d) {
+          _priorFolderState[d.getAttribute("data-folder-path")] = d.open;
+        });
       }
       var lowerQuery = query.toLowerCase();
       // Fuzzy: check if all chars appear in order
