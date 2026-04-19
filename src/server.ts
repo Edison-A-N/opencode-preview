@@ -673,7 +673,7 @@ async function renderSidebarHtml(
     <button class="sidebar-tab${defaultTab === "changes" ? " active" : ""}" data-tab="changes" type="button">Changes <span class="changes-count">${changesSidebar.count}</span></button>
     <button class="sidebar-tab" data-tab="commits" type="button">Commits</button>
   </div>
-  <div class="sidebar-panel${defaultTab === "files" ? " active" : ""}" data-panel="files">${treeHtml}</div>
+  <div class="sidebar-panel${defaultTab === "files" ? " active" : ""}" data-panel="files"><div class="sidebar-search-bar"><svg class="sidebar-search-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0zm-.82 4.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06l-3.04-3.04z"/></svg><input type="text" class="sidebar-search-input" id="sidebar-file-search" placeholder="Search files..." autocomplete="off" /><kbd class="sidebar-search-kbd" id="sidebar-search-kbd">Ctrl P</kbd></div>${treeHtml}</div>
   <div class="sidebar-panel${defaultTab === "changes" ? " active" : ""}" data-panel="changes">${changesHtml}</div>
   <div class="sidebar-panel" data-panel="commits"><div class="sidebar-loading commits-placeholder">Click to load commits</div></div>`
 }
@@ -1044,6 +1044,94 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
   }
   restoreFolderState();
   sidebar.addEventListener("toggle", function(e) { if (e.target && e.target.tagName === "DETAILS") saveFolderState(); }, true);
+
+  // --- file search / filter ---
+  (function() {
+    var searchInput = document.getElementById("sidebar-file-search");
+    var kbdHint = document.getElementById("sidebar-search-kbd");
+    if (!searchInput) return;
+    var filesPanel = sidebar.querySelector('.sidebar-panel[data-panel="files"]');
+    if (!filesPanel) return;
+
+    // Update kbd hint for macOS
+    if (kbdHint && /Mac|iPhone|iPad/.test(navigator.platform || "")) {
+      kbdHint.textContent = "⌘ P";
+    }
+
+    function filterFileTree(query) {
+      var allItems = filesPanel.querySelectorAll("li.file-item");
+      var allFolders = filesPanel.querySelectorAll("li.folder-item");
+      if (!query) {
+        // Reset: show everything, restore saved folder state
+        allItems.forEach(function(li) { li.style.display = ""; });
+        allFolders.forEach(function(li) { li.style.display = ""; });
+        restoreFolderState();
+        return;
+      }
+      var lowerQuery = query.toLowerCase();
+      // Fuzzy: check if all chars appear in order
+      function fuzzyMatch(text, q) {
+        var ti = 0;
+        for (var qi = 0; qi < q.length; qi++) {
+          var idx = text.indexOf(q[qi], ti);
+          if (idx === -1) return false;
+          ti = idx + 1;
+        }
+        return true;
+      }
+      // First pass: mark matching files
+      var matchedFiles = new Set();
+      allItems.forEach(function(li) {
+        var link = li.querySelector("a.file-link");
+        var filePath = link ? (link.getAttribute("data-tooltip") || "").toLowerCase() : "";
+        var fileName = filePath.split("/").pop() || "";
+        var matched = filePath.includes(lowerQuery) || fuzzyMatch(fileName, lowerQuery);
+        li.style.display = matched ? "" : "none";
+        if (matched) matchedFiles.add(li);
+      });
+      // Second pass: show folders that contain matches, expand them
+      allFolders.forEach(function(li) {
+        var hasVisible = li.querySelector("li.file-item:not([style*='display: none'])");
+        li.style.display = hasVisible ? "" : "none";
+        var details = li.querySelector(":scope > details");
+        if (details && hasVisible) details.open = true;
+      });
+    }
+
+    var _searchTimer = null;
+    searchInput.addEventListener("input", function() {
+      var val = searchInput.value.trim();
+      if (_searchTimer) clearTimeout(_searchTimer);
+      _searchTimer = setTimeout(function() { filterFileTree(val); }, 80);
+    });
+
+    searchInput.addEventListener("keydown", function(e) {
+      if (e.key === "Escape") {
+        searchInput.value = "";
+        filterFileTree("");
+        searchInput.blur();
+      }
+    });
+
+    // Ctrl+P / Cmd+P shortcut
+    document.addEventListener("keydown", function(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "p") {
+        e.preventDefault();
+        // Switch to files tab if not active
+        if (sidebar.__setSidebarTab) sidebar.__setSidebarTab("files");
+        searchInput.focus();
+        searchInput.select();
+      }
+    });
+
+    // Hide kbd hint when input is focused
+    searchInput.addEventListener("focus", function() {
+      if (kbdHint) kbdHint.style.display = "none";
+    });
+    searchInput.addEventListener("blur", function() {
+      if (kbdHint && !searchInput.value) kbdHint.style.display = "";
+    });
+  })();
 
   // --- sidebar files/changes tabs ---
   (function() {
