@@ -887,18 +887,19 @@ button:hover {
 
 .drawio-container {
   width: 100%;
-  min-height: calc(100vh - 3rem);
+  height: calc(100vh - 3rem);
   margin: 0;
   padding: 1rem;
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   justify-content: center;
   background: var(--bg);
 }
 
-#drawio-viewer {
+#drawio-viewer,
+.drawio-container > iframe {
   width: 100%;
-  min-height: calc(100vh - 5rem);
+  height: 100%;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -907,42 +908,13 @@ button:hover {
 }
 
 @media (prefers-color-scheme: dark) {
-  #drawio-viewer {
+  #drawio-viewer,
+  .drawio-container > iframe {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.15);
   }
 }
 
-/* draw.io viewer toolbar styling */
-.drawio-container .mxgraph .geDiagramContainer {
-  background: var(--card) !important;
-}
-
-.drawio-container .geToolbarContainer {
-  background: var(--card) !important;
-  border-bottom: 1px solid var(--border) !important;
-  border-radius: 12px 12px 0 0 !important;
-  padding: 4px 8px !important;
-}
-
-.drawio-container .geToolbarContainer .geButton {
-  border-radius: 6px !important;
-  opacity: 0.7;
-  transition: opacity 0.15s ease;
-}
-
-.drawio-container .geToolbarContainer .geButton:hover {
-  opacity: 1;
-}
-
-@media (prefers-color-scheme: dark) {
-  .drawio-container .geToolbarContainer {
-    filter: invert(1) hue-rotate(180deg);
-  }
-
-  .drawio-container .geDiagramContainer svg {
-    filter: invert(1) hue-rotate(180deg);
-  }
-}
+/* draw.io viewer internal styles are handled inside the iframe */
 
 .code-body {
   padding: 1rem 1.5rem 3rem;

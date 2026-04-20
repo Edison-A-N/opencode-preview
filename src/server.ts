@@ -1523,17 +1523,99 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
   }
 
   // --- drawio init (called after content load) ---
+  var _drawioCleanups = [];
+
   function initDrawio() {
-    var viewer = content.querySelector("#drawio-viewer");
-    if (!viewer || !viewer.getAttribute("data-mxgraph")) return;
-    if (typeof GraphViewer !== "undefined" && GraphViewer.processElements) {
-      GraphViewer.processElements();
-    } else {
-      var s = document.createElement("script");
-      s.src = "https://viewer.diagrams.net/js/viewer-static.min.js";
-      s.onload = function() { if (typeof GraphViewer !== "undefined") GraphViewer.processElements(); };
-      document.head.appendChild(s);
-    }
+    // Always clean up previous instance first (even for non-drawio content)
+    _drawioCleanups.forEach(function(fn) { fn(); });
+    _drawioCleanups = [];
+
+    var el = content.querySelector("#drawio-viewer");
+    if (!el) return;
+    var config = el.getAttribute("data-mxgraph");
+    if (!config) return;
+
+    // Extract raw XML from the config
+    var parsedCfg = JSON.parse(config);
+    var xml = parsedCfg.xml || '';
+    if (!xml) return;
+
+    // Base64-encode the XML to avoid HTML/JS escaping issues in Blob HTML
+    var xmlB64 = btoa(unescape(encodeURIComponent(xml)));
+    var isDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+
+    // Strategy: Use viewer-static.min.js's showLocalLightbox() to get a fully
+    // interactive EditorUi-based viewer (pan, zoom, pinch, pages, layers).
+    // The inline GraphViewer deliberately disables all interaction (setPanning(false),
+    // setEnabled(false)), but showLocalLightbox() creates a real EditorUi instance
+    // that has native support for drag-pan, wheel-zoom, and pinch-zoom.
+    var html = '<!DOCTYPE html><html><head>'
+      + '<meta charset="utf-8">'
+      + '<meta name="color-scheme" content="light dark">'
+      + '<style>'
+      + 'html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;'
+      + 'background:' + (isDark ? '#1e1e1e' : '#fff') + '}'
+      + '#mount{position:fixed;inset:0}'
+      // Lightbox fills the iframe; hide any close/overlay chrome
+      + '.geViewer{position:fixed!important;inset:0!important;margin:0!important;padding:0!important}'
+      + (isDark
+        ? '.geDiagramContainer svg{filter:invert(1) hue-rotate(180deg)}'
+        : '')
+      + '</style>'
+      + '<script>'
+      // Set asset paths so viewer-static resolves resources correctly in Blob iframe
+      + 'window.DRAWIO_BASE_URL="https://viewer.diagrams.net";'
+      + 'window.PROXY_URL=window.DRAWIO_BASE_URL+"/proxy";'
+      + 'window.STYLE_PATH=window.DRAWIO_BASE_URL+"/styles";'
+      + 'window.SHAPES_PATH=window.DRAWIO_BASE_URL+"/shapes";'
+      + 'window.STENCIL_PATH=window.DRAWIO_BASE_URL+"/stencils";'
+      + 'window.DRAW_MATH_URL=window.DRAWIO_BASE_URL+"/math4/es5";'
+      + 'window.GRAPH_IMAGE_PATH=window.DRAWIO_BASE_URL+"/img";'
+      + 'window.mxImageBasePath=window.DRAWIO_BASE_URL+"/mxgraph/images";'
+      + 'window.mxBasePath=window.DRAWIO_BASE_URL+"/mxgraph";'
+      + 'window.mxLoadStylesheets=false;'
+      + '<\\/script>'
+      + '</head><body>'
+      + '<div id="mount"></div>'
+      + '<script>'
+      + 'function _init(){'
+      + '  if(typeof GraphViewer==="undefined"||typeof mxUtils==="undefined")return;'
+      + '  var xml=decodeURIComponent(escape(atob("' + xmlB64 + '")));'
+      + '  var xmlDoc=mxUtils.parseXml(xml);'
+      + '  var mount=document.getElementById("mount");'
+      // Disable lightbox chrome (close button, overlay) so it fills the iframe
+      + '  GraphViewer.prototype.lightboxChrome=false;'
+      + '  var viewer=new GraphViewer(mount,xmlDoc.documentElement,{'
+      + '    highlight:"' + (isDark ? '#818cf8' : '#4f46e5') + '",'
+      + '    nav:true,resize:true,'
+      + '    toolbar:"pages zoom layers",'
+      + '    border:20,page:0,'
+      + '    lightbox:false,'
+      + '    "toolbar-nohide":true,'
+      + '    "allow-zoom-in":true,'
+      + '    "allow-zoom-out":true'
+      + '  });'
+      // showLocalLightbox() opens the interactive EditorUi viewer
+      + '  viewer.showLocalLightbox();'
+      // Hide the inert inline viewer underneath
+      + '  mount.style.display="none";'
+      + '}'
+      + '<\\/script>'
+      + '<script src="https://viewer.diagrams.net/js/viewer-static.min.js" onload="_init()"><\\/script>'
+      + '</body></html>';
+
+    var blob = new Blob([html], { type: 'text/html' });
+    var blobUrl = URL.createObjectURL(blob);
+
+    var iframe = document.createElement('iframe');
+    iframe.style.cssText = 'width:100%;height:100%;border:none;display:block;border-radius:12px;';
+    iframe.src = blobUrl;
+
+    el.parentNode.replaceChild(iframe, el);
+
+    _drawioCleanups.push(function() {
+      URL.revokeObjectURL(blobUrl);
+    });
   }
 
   // --- initial content: hydrate tabs ---
