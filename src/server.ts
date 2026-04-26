@@ -4,6 +4,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import path from "node:path"
 import { WebSocket, WebSocketServer } from "ws"
 
+import { fileURLToPath } from "node:url"
+
 import { renderCodeBody } from "./renderers/code"
 import { renderCsvBody } from "./renderers/csv"
 import { renderCommitDiff, renderDiffBody } from "./renderers/diff"
@@ -11,10 +13,8 @@ import { countDiagramPages } from "./renderers/drawio"
 import { renderHtmlBody } from "./renderers/html"
 import { renderMarkdownBody } from "./renderers/markdown"
 
-// Eagerly resolve template paths at module load time (import.meta.dir is
-// correct when the module is first evaluated, but may become stale inside
-// async request handlers in certain plugin host environments such as OpenCode).
-const TEMPLATES_DIR = path.join(import.meta.dir, "templates")
+const __dirname = (import.meta as any).dir ?? path.dirname(fileURLToPath(import.meta.url))
+const TEMPLATES_DIR = path.join(__dirname, "templates")
 
 let _stylesCss: string | undefined
 

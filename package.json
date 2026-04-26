@@ -2,17 +2,53 @@
   "name": "opencode-preview",
   "version": "0.7.1",
   "description": "OpenCode plugin for Markdown and DrawIO preview with live reload",
-  "main": "src/index.ts",
   "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./server": "./src/index.ts",
-    "./tui": "./src/tui.tsx"
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./server": {
+      "import": "./dist/server.js",
+      "types": "./dist/server.d.ts"
+    },
+    "./tui": {
+      "import": "./dist/tui.js",
+      "types": "./dist/tui.d.ts"
+    }
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "bun run src/server.ts",
+    "build": "rm -rf dist && tsup",
+    "prepublishOnly": "npm run build",
     "test": "bun test"
   },
+  "keywords": [
+    "opencode",
+    "preview",
+    "markdown",
+    "drawio",
+    "live-reload",
+    "plugin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Edison-A-N/opencode-preview.git"
+  },
+  "homepage": "https://github.com/Edison-A-N/opencode-preview#readme",
+  "bugs": {
+    "url": "https://github.com/Edison-A-N/opencode-preview/issues"
+  },
+  "license": "MIT",
+  "author": "Edison-A-N",
   "dependencies": {
     "@opencode-ai/plugin": "latest",
     "marked": "^15.0.12",
@@ -23,6 +59,7 @@
     "@opentui/solid": "^0.1.92",
     "@types/bun": "latest",
     "@types/ws": "^8",
-    "baseline-browser-mapping": "^2.10.12"
+    "baseline-browser-mapping": "^2.10.12",
+    "tsup": "^8.5.1"
   }
 }
