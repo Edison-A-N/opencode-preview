@@ -17,6 +17,7 @@ export default defineConfig([
       "@opentui/core",
       "@opentui/solid",
     ],
+    noExternal: ["ws", "marked"],
     async onSuccess() {
       const { cpSync, mkdirSync } = await import("node:fs")
       mkdirSync("dist/templates", { recursive: true })
@@ -35,5 +36,6 @@ export default defineConfig([
       "@opentui/core",
       "@opentui/solid",
     ],
+    noExternal: ["ws", "marked"],
   },
 ])
