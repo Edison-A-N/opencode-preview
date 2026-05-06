@@ -43,10 +43,16 @@ interface ProjectInfo {
 const projectCache = new Map<string, { dir: string; time: number }>()
 const PROJECT_CACHE_TTL = 60_000
 
+function getAuthHeaders(): Record<string, string> {
+  const pw = process.env.OPENCODE_SERVER_PASSWORD
+  if (!pw) return {}
+  return { Authorization: `Basic ${Buffer.from(`opencode:${pw}`).toString("base64")}` }
+}
+
 async function fetchProjects(): Promise<ProjectInfo[]> {
   if (!opencodeServerUrl) return []
   try {
-    const resp = await fetch(`${opencodeServerUrl}/project`)
+    const resp = await fetch(`${opencodeServerUrl}/project`, { headers: getAuthHeaders() })
     if (!resp.ok) return []
     return (await resp.json()) as ProjectInfo[]
   } catch {
@@ -750,6 +756,7 @@ async function renderShellPage(projectId: string, worktreeParams: string, rootDi
     </div>
   </div>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
   <script>
 ${shellScript(projectId, worktreeParams, rootDir)}
   </script>
@@ -844,6 +851,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       content.className = tab.cachedClass || "preview-content";
       content.innerHTML = tab.cachedHtml;
       content.scrollTop = tab.scrollTop || 0;
+      initMermaid();
       content.querySelectorAll("pre code").forEach(function(b) { if (window.hljs) window.hljs.highlightElement(b); });
       initToc();
       initDrawio();
@@ -885,6 +893,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
         content.className = tab.cachedClass;
         content.innerHTML = tab.cachedHtml;
         content.style.opacity = "";
+        initMermaid();
         content.querySelectorAll("pre code").forEach(function(b) { if (window.hljs) window.hljs.highlightElement(b); });
         initToc();
         initDrawio();
@@ -1618,6 +1627,23 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     });
   }
 
+  var _mermaidId = 0;
+  function initMermaid() {
+    if (!window.mermaid) return;
+    var nodes = content.querySelectorAll("pre code.language-mermaid, pre code.mermaid");
+    if (!nodes.length) return;
+    nodes.forEach(function(codeEl) {
+      var pre = codeEl.parentElement;
+      var div = document.createElement("div");
+      div.className = "mermaid";
+      div.id = "mermaid-" + (++_mermaidId);
+      div.textContent = codeEl.textContent;
+      pre.parentElement.replaceChild(div, pre);
+    });
+    window.mermaid.initialize({ startOnLoad: false, theme: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default" });
+    window.mermaid.run();
+  }
+
   // --- initial content: hydrate tabs ---
   (function() {
     var params = new URLSearchParams(window.location.search);
@@ -1647,6 +1673,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
         activeTabIndex = 0;
       }
       if (tab.cachedHtml) {
+        initMermaid();
         content.querySelectorAll("pre code").forEach(function(b) { if (window.hljs) window.hljs.highlightElement(b); });
         initToc();
         initDrawio();
