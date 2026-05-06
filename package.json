@@ -1,6 +1,6 @@
 {
   "name": "opencode-preview",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "description": "OpenCode plugin for Markdown and DrawIO preview with live reload",
   "type": "module",
   "main": "./dist/index.js",
