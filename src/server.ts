@@ -46,7 +46,8 @@ const PROJECT_CACHE_TTL = 60_000
 function getAuthHeaders(): Record<string, string> {
   const pw = process.env.OPENCODE_SERVER_PASSWORD
   if (!pw) return {}
-  return { Authorization: `Basic ${Buffer.from(`opencode:${pw}`).toString("base64")}` }
+  const user = process.env.OPENCODE_SERVER_USERNAME ?? "opencode"
+  return { Authorization: `Basic ${Buffer.from(`${user}:${pw}`).toString("base64")}` }
 }
 
 async function fetchProjects(): Promise<ProjectInfo[]> {
@@ -1632,6 +1633,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     if (!window.mermaid) return;
     var nodes = content.querySelectorAll("pre code.language-mermaid, pre code.mermaid");
     if (!nodes.length) return;
+    var divsToRender = [];
     nodes.forEach(function(codeEl) {
       var pre = codeEl.parentElement;
       var div = document.createElement("div");
@@ -1639,9 +1641,10 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       div.id = "mermaid-" + (++_mermaidId);
       div.textContent = codeEl.textContent;
       pre.parentElement.replaceChild(div, pre);
+      divsToRender.push(div);
     });
     window.mermaid.initialize({ startOnLoad: false, theme: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default" });
-    window.mermaid.run();
+    window.mermaid.run({ nodes: divsToRender });
   }
 
   // --- initial content: hydrate tabs ---
