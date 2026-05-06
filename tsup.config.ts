@@ -13,7 +13,6 @@ export default defineConfig([
     target: "node20",
     outDir: "dist",
     external: [
-      "@opencode-ai/plugin",
       "@opentui/core",
       "@opentui/solid",
     ],
@@ -32,7 +31,6 @@ export default defineConfig([
     target: "node20",
     outDir: "dist",
     external: [
-      "@opencode-ai/plugin",
       "@opentui/core",
       "@opentui/solid",
     ],
