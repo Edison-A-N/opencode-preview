@@ -3,11 +3,11 @@
   "version": "0.7.2",
   "description": "OpenCode plugin for Markdown and DrawIO preview with live reload",
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
   "exports": {
-    ".": "./src/index.ts",
-    "./server": "./src/index.ts",
-    "./tui": "./src/tui.tsx"
+    ".": "./dist/index.js",
+    "./server": "./dist/server.js",
+    "./tui": "./dist/tui.js"
   },
   "publishConfig": {
     "main": "./dist/index.js",
@@ -36,6 +36,7 @@
   "scripts": {
     "dev": "bun run src/server.ts",
     "build": "rm -rf dist && tsup",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run build",
     "test": "bun test"
   },
