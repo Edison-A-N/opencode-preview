@@ -1,12 +1,12 @@
 {
   "name": "opencode-preview",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "OpenCode plugin for Markdown and DrawIO preview with live reload",
   "type": "module",
   "main": "./dist/index.js",
   "exports": {
     ".": "./dist/index.js",
-    "./server": "./dist/server.js",
+    "./standalone": "./dist/server.js",
     "./tui": "./dist/tui.js"
   },
   "publishConfig": {
@@ -18,7 +18,7 @@
         "import": "./dist/index.js",
         "types": "./dist/index.d.ts"
       },
-      "./server": {
+      "./standalone": {
         "import": "./dist/server.js",
         "types": "./dist/server.d.ts"
       },
