@@ -647,9 +647,22 @@ function renderWorktreeSwitcherHtml(worktrees: WorktreeInfo[], activeWt: string,
   return `<div class="wt-switcher" id="sidebar-wt-switcher"><button class="wt-trigger" type="button" aria-expanded="false"><span class="wt-trigger-icon">${BRANCH_SVG}</span><span class="wt-trigger-name">${escapeHtml(current.label)}</span><span class="wt-trigger-chevron">${CHEVRON_SVG}</span></button><div class="wt-dropdown" data-open="false">${optionItems}</div></div>`
 }
 
-function renderCopyPathHtml(rootDir: string): string {
+function renderCopyPathHtml(rootDir: string, projectId: string, projects: ProjectInfo[]): string {
   const projectName = rootDir.split("/").filter(Boolean).pop() || rootDir
-  return `<div class="copy-path-row"><span class="copy-path-project" title="${escapeHtml(rootDir)}">${FOLDER_SVG}<span class="copy-path-name">${escapeHtml(projectName)}</span></span><button class="copy-path-btn" id="copy-path-btn" type="button" title="${escapeHtml(rootDir)}">${COPY_SVG}<span>Copy Path</span></button></div>`
+
+  const sorted = [...projects].sort((a, b) =>
+    (a.name ?? path.basename(a.worktree)).localeCompare(b.name ?? path.basename(b.worktree)),
+  )
+  const optionItems = sorted.map((p) => {
+    const isActive = p.id === projectId
+    const label = p.name ?? path.basename(p.worktree)
+    const href = `/browse?project=${encodeURIComponent(p.id)}`
+    return `<button class="wt-option" type="button" data-active="${isActive}" data-href="${escapeHtml(href)}" title="${escapeHtml(p.worktree)}"><span class="wt-option-check">${CHECK_SVG}</span><span class="wt-option-label">${escapeHtml(label)}</span></button>`
+  }).join("")
+
+  const switcher = `<div class="project-switcher" id="sidebar-project-switcher"><button class="copy-path-project project-trigger" type="button" aria-expanded="false" title="${escapeHtml(rootDir)}">${FOLDER_SVG}<span class="copy-path-name">${escapeHtml(projectName)}</span><span class="project-trigger-chevron">${CHEVRON_SVG}</span></button><div class="wt-dropdown project-dropdown" data-open="false">${optionItems}</div></div>`
+
+  return `<div class="copy-path-row">${switcher}<button class="copy-path-btn" id="copy-path-btn" type="button" title="${escapeHtml(rootDir)}">${COPY_SVG}<span>Copy Path</span></button></div>`
 }
 
 async function renderSidebarHtml(
@@ -660,14 +673,15 @@ async function renderSidebarHtml(
   projectRootDir: string,
   rootDir: string,
 ): Promise<string> {
-  const [files, worktrees, changesSidebar] = await Promise.all([
+  const [files, worktrees, changesSidebar, projects] = await Promise.all([
     collectPreviewFiles(rootDir),
     listWorktrees(projectRootDir),
     renderChangesSidebarHtml(projectId, worktreeParams, rootDir, currentDiff),
+    fetchProjects(),
   ])
   const activeWt = new URLSearchParams(worktreeParams).get("worktree") || ""
   const wtHtml = renderWorktreeSwitcherHtml(worktrees, activeWt, projectId)
-  const cpHtml = renderCopyPathHtml(rootDir)
+  const cpHtml = renderCopyPathHtml(rootDir, projectId, projects)
   const treeHtml = files.length === 0
     ? '<div class="sidebar-loading">No files found.</div>'
     : renderFileTreeHtml(buildFileTree(files), projectId, worktreeParams, currentFile)
@@ -1293,6 +1307,28 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     if (!container) return;
     var trigger = container.querySelector(".wt-trigger");
     var dropdown = container.querySelector(".wt-dropdown");
+    if (!trigger || !dropdown) return;
+    trigger.addEventListener("click", function(e) {
+      e.stopPropagation();
+      var open = dropdown.getAttribute("data-open") === "true";
+      dropdown.setAttribute("data-open", open ? "false" : "true");
+      trigger.setAttribute("aria-expanded", open ? "false" : "true");
+    });
+    document.addEventListener("click", function() { dropdown.setAttribute("data-open", "false"); trigger.setAttribute("aria-expanded", "false"); });
+    dropdown.querySelectorAll(".wt-option").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var href = btn.getAttribute("data-href");
+        if (href) window.location.href = href;
+      });
+    });
+  })();
+
+  // --- project switcher dropdown ---
+  (function() {
+    var container = document.getElementById("sidebar-project-switcher");
+    if (!container) return;
+    var trigger = container.querySelector(".project-trigger");
+    var dropdown = container.querySelector(".project-dropdown");
     if (!trigger || !dropdown) return;
     trigger.addEventListener("click", function(e) {
       e.stopPropagation();

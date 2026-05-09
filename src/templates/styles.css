@@ -252,6 +252,51 @@ a:hover {
   cursor: default;
 }
 
+.project-switcher {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.project-trigger {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 0.15rem 0.3rem;
+  margin: 0 -0.3rem;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  transition: background 0.15s;
+}
+
+.project-trigger:hover {
+  background: var(--list-hover);
+}
+
+.project-trigger[aria-expanded="true"] {
+  background: var(--list-hover);
+}
+
+.project-trigger-chevron {
+  display: inline-flex;
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--muted);
+  opacity: 0.7;
+  transition: transform 0.15s;
+}
+
+.project-trigger[aria-expanded="true"] .project-trigger-chevron {
+  transform: rotate(180deg);
+}
+
+.project-dropdown {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 .copy-path-project {
   display: inline-flex;
   align-items: center;
