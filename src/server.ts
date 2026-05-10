@@ -657,10 +657,14 @@ function renderCopyPathHtml(rootDir: string, projectId: string, projects: Projec
     const isActive = p.id === projectId
     const label = p.name ?? path.basename(p.worktree)
     const href = `/browse?project=${encodeURIComponent(p.id)}`
-    return `<button class="wt-option" type="button" data-active="${isActive}" data-href="${escapeHtml(href)}" title="${escapeHtml(p.worktree)}"><span class="wt-option-check">${CHECK_SVG}</span><span class="wt-option-label">${escapeHtml(label)}</span></button>`
+    const searchText = (label + " " + p.worktree).toLowerCase()
+    return `<button class="wt-option project-option" type="button" data-active="${isActive}" data-href="${escapeHtml(href)}" data-search="${escapeHtml(searchText)}" title="${escapeHtml(p.worktree)}"><span class="wt-option-check">${CHECK_SVG}</span><span class="wt-option-label">${escapeHtml(label)}</span></button>`
   }).join("")
 
-  const switcher = `<div class="project-switcher" id="sidebar-project-switcher"><button class="copy-path-project project-trigger" type="button" aria-expanded="false" title="${escapeHtml(rootDir)}">${FOLDER_SVG}<span class="copy-path-name">${escapeHtml(projectName)}</span><span class="project-trigger-chevron">${CHEVRON_SVG}</span></button><div class="wt-dropdown project-dropdown" data-open="false">${optionItems}</div></div>`
+  const searchHtml = `<div class="project-search"><input type="text" class="project-search-input" placeholder="Search projects..." /></div>`
+  const emptyHtml = `<div class="project-search-empty" style="display: none;">No projects found</div>`
+
+  const switcher = `<div class="project-switcher" id="sidebar-project-switcher"><button class="copy-path-project project-trigger" type="button" aria-expanded="false" title="${escapeHtml(rootDir)}">${FOLDER_SVG}<span class="copy-path-name">${escapeHtml(projectName)}</span><span class="project-trigger-chevron">${CHEVRON_SVG}</span></button><div class="wt-dropdown project-dropdown" data-open="false">${searchHtml}${optionItems}${emptyHtml}</div></div>`
 
   return `<div class="copy-path-row">${switcher}<button class="copy-path-btn" id="copy-path-btn" type="button" title="${escapeHtml(rootDir)}">${COPY_SVG}<span>Copy Path</span></button></div>`
 }
@@ -1330,14 +1334,44 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     var trigger = container.querySelector(".project-trigger");
     var dropdown = container.querySelector(".project-dropdown");
     if (!trigger || !dropdown) return;
+    var searchInput = container.querySelector(".project-search-input");
+    var options = Array.from(dropdown.querySelectorAll(".project-option"));
+    var emptyState = dropdown.querySelector(".project-search-empty");
+
     trigger.addEventListener("click", function(e) {
       e.stopPropagation();
       var open = dropdown.getAttribute("data-open") === "true";
       dropdown.setAttribute("data-open", open ? "false" : "true");
       trigger.setAttribute("aria-expanded", open ? "false" : "true");
+      if (!open && searchInput) {
+        searchInput.value = "";
+        searchInput.dispatchEvent(new Event("input"));
+        setTimeout(function() { searchInput.focus(); }, 50);
+      }
     });
+
+    if (searchInput) {
+      searchInput.addEventListener("click", function(e) { e.stopPropagation(); });
+      searchInput.addEventListener("input", function(e) {
+        var val = (e.target.value || "").toLowerCase();
+        var visibleCount = 0;
+        options.forEach(function(opt) {
+          var text = opt.getAttribute("data-search") || "";
+          if (!val || text.indexOf(val) !== -1) {
+            opt.style.display = "";
+            visibleCount++;
+          } else {
+            opt.style.display = "none";
+          }
+        });
+        if (emptyState) emptyState.style.display = visibleCount === 0 ? "block" : "none";
+      });
+    }
+
+    dropdown.addEventListener("click", function(e) { e.stopPropagation(); });
     document.addEventListener("click", function() { dropdown.setAttribute("data-open", "false"); trigger.setAttribute("aria-expanded", "false"); });
-    dropdown.querySelectorAll(".wt-option").forEach(function(btn) {
+
+    options.forEach(function(btn) {
       btn.addEventListener("click", function() {
         var href = btn.getAttribute("data-href");
         if (href) window.location.href = href;

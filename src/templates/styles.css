@@ -297,6 +297,38 @@ a:hover {
   overflow-y: auto;
 }
 
+.project-search {
+  padding: 0.4rem;
+  position: sticky;
+  top: 0;
+  background: var(--card);
+  z-index: 1;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.25rem;
+}
+
+.project-search-input {
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.8rem;
+  outline: none;
+}
+
+.project-search-input:focus {
+  border-color: var(--focus-border);
+}
+
+.project-search-empty {
+  padding: 0.5rem 1rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-align: center;
+}
+
 .copy-path-project {
   display: inline-flex;
   align-items: center;
