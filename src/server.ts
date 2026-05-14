@@ -2153,8 +2153,11 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
 
   // Worktrees API
   if (pathname === "/api/worktrees") {
-    const worktrees = await listWorktrees(projectRootDir)
-    sendJson(res, { worktrees })
+    const [worktrees, defaultBranch] = await Promise.all([
+      listWorktrees(projectRootDir),
+      getCurrentBranch(projectRootDir),
+    ])
+    sendJson(res, { worktrees, defaultBranch })
     return
   }
 
