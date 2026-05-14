@@ -1,10 +1,9 @@
 import { type FSWatcher, watch } from "node:fs"
 import { readdir, readFile, stat } from "node:fs/promises"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
+import { fileURLToPath } from "node:url"
 import path from "node:path"
 import { WebSocket, WebSocketServer } from "ws"
-
-import { fileURLToPath } from "node:url"
 
 import { renderCodeBody } from "./renderers/code"
 import { renderCsvBody } from "./renderers/csv"
@@ -218,14 +217,36 @@ interface WorktreeInfo {
 async function getWorktreeBranch(gitDir: string, worktreeName: string): Promise<string> {
   try {
     const headPath = path.join(gitDir, "worktrees", worktreeName, "HEAD")
-    const headContent = (await readFile(headPath, "utf-8")).trim()
-    const refMatch = headContent.match(/^ref:\s*refs\/heads\/(.+)$/)
-    if (refMatch) return refMatch[1]
-    // Detached HEAD — show short hash
-    return headContent.slice(0, 8)
+    return readBranchFromHead(headPath)
   } catch {
     return "unknown"
   }
+}
+
+export async function getCurrentBranch(baseDir: string): Promise<string> {
+  try {
+    const gitPath = path.join(baseDir, ".git")
+    const gitStat = await stat(gitPath)
+    const headDir = gitStat.isDirectory()
+      ? gitPath
+      : path.resolve(baseDir, parseGitdirFile(await readFile(gitPath, "utf-8")))
+    return readBranchFromHead(path.join(headDir, "HEAD"))
+  } catch {
+    return "unknown"
+  }
+}
+
+function parseGitdirFile(content: string): string {
+  const match = content.trim().match(/^gitdir:\s*(.+)$/)
+  if (!match) throw new Error("Invalid .git file format")
+  return match[1]
+}
+
+async function readBranchFromHead(headPath: string): Promise<string> {
+  const headContent = (await readFile(headPath, "utf-8")).trim()
+  const refMatch = headContent.match(/^ref:\s*refs\/heads\/(.+)$/)
+  if (refMatch) return refMatch[1]
+  return headContent.slice(0, 8)
 }
 
 async function listWorktrees(baseDir: string): Promise<WorktreeInfo[]> {
@@ -630,9 +651,9 @@ const CHECK_SVG = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" x
 const COPY_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4.5 3A1.5 1.5 0 0 1 6 1.5h5.5a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 11V3z" stroke="currentColor" stroke-width="1.3"/><path d="M3 4.5h-.5A1.5 1.5 0 0 0 1 6v7.5A1.5 1.5 0 0 0 2.5 15H10a1.5 1.5 0 0 0 1.5-1.5V13" stroke="currentColor" stroke-width="1.3"/></svg>'
 const FOLDER_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3.38a1 1 0 0 1 .72.3L8.42 3.7a1 1 0 0 0 .72.3H13a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5H3A1.5 1.5 0 0 1 1.5 12.5v-9z" stroke="currentColor" stroke-width="1.2"/></svg>'
 
-function renderWorktreeSwitcherHtml(worktrees: WorktreeInfo[], activeWt: string, projectId: string): string {
+function renderWorktreeSwitcherHtml(worktrees: WorktreeInfo[], activeWt: string, projectId: string, defaultBranch: string): string {
   if (worktrees.length === 0) return ""
-  const allOptions: { value: string; label: string }[] = [{ value: "", label: "main" }]
+  const allOptions: { value: string; label: string }[] = [{ value: "", label: defaultBranch }]
   for (const wt of worktrees) allOptions.push({ value: wt.name, label: wt.branch ? `${wt.name} (${wt.branch})` : wt.name })
   const current = allOptions.find((o) => o.value === activeWt) ?? allOptions[0]
 
@@ -657,7 +678,7 @@ function renderCopyPathHtml(rootDir: string, projectId: string, projects: Projec
     const isActive = p.id === projectId
     const label = p.name ?? path.basename(p.worktree)
     const href = `/browse?project=${encodeURIComponent(p.id)}`
-    const searchText = (label + " " + p.worktree).toLowerCase()
+    const searchText = `${label} ${p.worktree}`.toLowerCase()
     return `<button class="wt-option project-option" type="button" data-active="${isActive}" data-href="${escapeHtml(href)}" data-search="${escapeHtml(searchText)}" title="${escapeHtml(p.worktree)}"><span class="wt-option-check">${CHECK_SVG}</span><span class="wt-option-label">${escapeHtml(label)}</span></button>`
   }).join("")
 
@@ -677,14 +698,15 @@ async function renderSidebarHtml(
   projectRootDir: string,
   rootDir: string,
 ): Promise<string> {
-  const [files, worktrees, changesSidebar, projects] = await Promise.all([
+  const [files, worktrees, changesSidebar, projects, defaultBranch] = await Promise.all([
     collectPreviewFiles(rootDir),
     listWorktrees(projectRootDir),
     renderChangesSidebarHtml(projectId, worktreeParams, rootDir, currentDiff),
     fetchProjects(),
+    getCurrentBranch(projectRootDir),
   ])
   const activeWt = new URLSearchParams(worktreeParams).get("worktree") || ""
-  const wtHtml = renderWorktreeSwitcherHtml(worktrees, activeWt, projectId)
+  const wtHtml = renderWorktreeSwitcherHtml(worktrees, activeWt, projectId, defaultBranch)
   const cpHtml = renderCopyPathHtml(rootDir, projectId, projects)
   const treeHtml = files.length === 0
     ? '<div class="sidebar-loading">No files found.</div>'

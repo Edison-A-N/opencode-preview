@@ -1,8 +1,11 @@
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { describe, expect, test } from "bun:test"
-import { ensureInsideRoot, isPreviewable, getCodeLanguage } from "../src/server"
-import { renderMarkdownBody } from "../src/renderers/markdown"
 import { renderCodeBody } from "../src/renderers/code"
 import { renderHtmlBody } from "../src/renderers/html"
+import { renderMarkdownBody } from "../src/renderers/markdown"
+import { ensureInsideRoot, getCodeLanguage, getCurrentBranch, isPreviewable } from "../src/server"
 
 describe("isPreviewable", () => {
   test("accepts markdown files", () => {
@@ -77,6 +80,25 @@ describe("ensureInsideRoot", () => {
 
   test("rejects absolute paths outside root", () => {
     expect(() => ensureInsideRoot("/project", "/etc/passwd")).toThrow("Path is outside of preview root")
+  })
+})
+
+describe("getCurrentBranch", () => {
+  test("reads branch from a normal git directory", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "preview-branch-"))
+    await mkdir(path.join(dir, ".git"))
+    await writeFile(path.join(dir, ".git", "HEAD"), "ref: refs/heads/feature/workspace\n")
+
+    expect(await getCurrentBranch(dir)).toBe("feature/workspace")
+  })
+
+  test("reads branch from a linked worktree gitdir", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "preview-worktree-"))
+    const gitDir = await mkdtemp(path.join(tmpdir(), "preview-gitdir-"))
+    await writeFile(path.join(dir, ".git"), `gitdir: ${gitDir}\n`)
+    await writeFile(path.join(gitDir, "HEAD"), "ref: refs/heads/actual-branch\n")
+
+    expect(await getCurrentBranch(dir)).toBe("actual-branch")
   })
 })
 
