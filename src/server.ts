@@ -1359,6 +1359,23 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     var searchInput = container.querySelector(".project-search-input");
     var options = Array.from(dropdown.querySelectorAll(".project-option"));
     var emptyState = dropdown.querySelector(".project-search-empty");
+    var highlightIndex = -1;
+
+    function updateHighlight() {
+      var visibleOptions = options.filter(function(opt) { return opt.style.display !== "none"; });
+      options.forEach(function(opt) { opt.removeAttribute("data-highlighted"); });
+      if (visibleOptions.length > 0) {
+        if (highlightIndex >= visibleOptions.length) highlightIndex = visibleOptions.length - 1;
+        if (highlightIndex < 0) highlightIndex = 0;
+        var active = visibleOptions[highlightIndex];
+        active.setAttribute("data-highlighted", "true");
+        if (active.scrollIntoView) {
+          active.scrollIntoView({ block: "nearest" });
+        }
+      } else {
+        highlightIndex = -1;
+      }
+    }
 
     trigger.addEventListener("click", function(e) {
       e.stopPropagation();
@@ -1374,6 +1391,28 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
 
     if (searchInput) {
       searchInput.addEventListener("click", function(e) { e.stopPropagation(); });
+      searchInput.addEventListener("keydown", function(e) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          highlightIndex++;
+          updateHighlight();
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          highlightIndex--;
+          updateHighlight();
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          var visibleOptions = options.filter(function(opt) { return opt.style.display !== "none"; });
+          if (highlightIndex >= 0 && highlightIndex < visibleOptions.length) {
+            visibleOptions[highlightIndex].click();
+          }
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dropdown.setAttribute("data-open", "false");
+          trigger.setAttribute("aria-expanded", "false");
+          trigger.focus();
+        }
+      });
       searchInput.addEventListener("input", function(e) {
         var val = (e.target.value || "").toLowerCase();
         var visibleCount = 0;
@@ -1387,6 +1426,8 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
           }
         });
         if (emptyState) emptyState.style.display = visibleCount === 0 ? "block" : "none";
+        highlightIndex = 0;
+        updateHighlight();
       });
     }
 

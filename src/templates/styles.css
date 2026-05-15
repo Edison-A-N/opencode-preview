@@ -202,7 +202,8 @@ a:hover {
   text-align: left;
 }
 
-.wt-option:hover {
+.wt-option:hover,
+.wt-option[data-highlighted="true"] {
   background: var(--list-hover);
 }
 
