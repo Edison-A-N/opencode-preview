@@ -590,6 +590,11 @@ function escapeHtml(text: string): string {
   })
 }
 
+function safeProjectIconColor(color: string | undefined): string {
+  if (!color) return "var(--primary)"
+  return /^#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?(?:[0-9a-fA-F]{2})?$/.test(color) ? color : "var(--primary)"
+}
+
 // --- Server-side sidebar rendering ---
 
 const ICON_COLORS: Record<string, [string, string]> = {
@@ -1145,7 +1150,18 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
         }
         return true;
       }
-      // First pass: mark matching files
+      // Identify matched folders
+      var matchedFolders = new Set();
+      allFolders.forEach(function(li) {
+        var details = li.querySelector(":scope > details");
+        var folderPath = details ? (details.getAttribute("data-folder-path") || "").toLowerCase() : "";
+        var folderName = folderPath.split("/").pop() || "";
+        if (folderPath.includes(lowerQuery) || fuzzyMatch(folderName, lowerQuery)) {
+          matchedFolders.add(li);
+        }
+      });
+
+      // Pass: mark matching files
       var matchedFiles = new Set();
       allItems.forEach(function(li) {
         var link = li.querySelector("a.file-link");
@@ -1155,11 +1171,13 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
         if (matched) { li.classList.remove("search-hidden"); matchedFiles.add(li); }
         else { li.classList.add("search-hidden"); }
       });
+
       allFolders.forEach(function(li) {
         var hasVisible = matchedFiles.size > 0 && li.querySelector("li.file-item:not(.search-hidden)");
-        if (hasVisible) { li.classList.remove("search-hidden"); } else { li.classList.add("search-hidden"); }
+        var selfMatched = matchedFolders.has(li);
+        if (hasVisible || selfMatched) { li.classList.remove("search-hidden"); } else { li.classList.add("search-hidden"); }
         var details = li.querySelector(":scope > details");
-        if (details && hasVisible) details.open = true;
+        if (details && (hasVisible || selfMatched)) details.open = true;
       });
     }
 
@@ -1865,23 +1883,33 @@ function sendJson(res: ServerResponse, payload: unknown, status = 200): void {
 // --- Project list page ---
 
 function renderProjectListPage(projects: ProjectInfo[]): string {
-  const sortedProjects = projects.sort((a, b) =>
+  const sortedProjects = [...projects].sort((a, b) =>
     (a.name ?? path.basename(a.worktree)).localeCompare(b.name ?? path.basename(b.worktree)),
   )
 
   const projectItems = sortedProjects
     .map((p) => {
-      const name = escapeHtml(p.name ?? path.basename(p.worktree))
-      const dir = escapeHtml(p.worktree)
-      const color = p.icon?.color ?? "var(--primary)"
-      return `<li class="file-item" data-name="${name.toLowerCase()}" data-dir="${dir.toLowerCase()}"><a href="/browse?project=${encodeURIComponent(p.id)}"><span class="file-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16"><rect x="1" y="2" width="14" height="12" rx="2" fill="${color}" opacity="0.15"/><path d="M1 4c0-1.1.9-2 2-2h3.5l1.5 2H13c1.1 0 2 .9 2 2v6c0 1.1-.9 2-2 2H3c-1.1 0-2-.9-2-2V4z" fill="none" stroke="${color}" stroke-width="1.2"/></svg></span><span class="file-path">${name}</span></a><div style="padding-left:2.4rem;font-size:0.78rem;color:var(--muted);margin-top:-2px">${dir}</div></li>`
-    })
-    .join("\n")
-
-  const projectOptions = sortedProjects
-    .map((p) => {
-      const name = escapeHtml(p.name ?? path.basename(p.worktree))
-      return `<option value="${encodeURIComponent(p.id)}">${name}</option>`
+      const rawName = p.name ?? path.basename(p.worktree)
+      const rawDir = p.worktree
+      const name = escapeHtml(rawName)
+      const dir = escapeHtml(rawDir)
+      const searchName = escapeHtml(rawName.toLowerCase())
+      const searchDir = escapeHtml(rawDir.toLowerCase())
+      const color = safeProjectIconColor(p.icon?.color)
+      return `<li class="project-card" data-name="${searchName}" data-dir="${searchDir}">
+  <a href="/browse?project=${encodeURIComponent(p.id)}" class="project-card-link">
+    <div class="project-card-icon">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="20" height="20">
+        <rect x="1" y="2" width="14" height="12" rx="2" fill="${color}" opacity="0.15"/>
+        <path d="M1 4c0-1.1.9-2 2-2h3.5l1.5 2H13c1.1 0 2 .9 2 2v6c0 1.1-.9 2-2 2H3c-1.1 0-2-.9-2-2V4z" fill="none" stroke="${color}" stroke-width="1.2"/>
+      </svg>
+    </div>
+    <div class="project-card-content">
+      <div class="project-card-name">${name}</div>
+      <div class="project-card-path">${dir}</div>
+    </div>
+  </a>
+</li>`
     })
     .join("\n")
 
@@ -1893,23 +1921,48 @@ function renderProjectListPage(projects: ProjectInfo[]): string {
     <title>Preview — Projects</title>
     <link rel="stylesheet" href="/styles.css" />
     <style>
+      body { background: var(--card); }
+      .home-container {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 4rem 1.5rem;
+      }
+      .home-header {
+        margin-bottom: 2rem;
+        text-align: center;
+      }
+      .home-header h1 {
+        margin: 0 0 0.5rem;
+        font-size: 2rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        color: var(--text);
+      }
+      .home-header p {
+        margin: 0;
+        font-size: 1rem;
+        color: var(--muted);
+      }
+      .home-controls {
+        margin-bottom: 2rem;
+      }
       .project-search-bar {
         position: relative;
-        margin: 0 1.25rem 0.5rem;
-      }
+       }
       .project-search-input {
         width: 100%;
-        padding: 0.45rem 0.65rem 0.45rem 2rem;
+        padding: 0.6rem 0.8rem 0.6rem 2.2rem;
         border: 1px solid var(--border);
-        border-radius: 6px;
+        border-radius: 8px;
         background: var(--bg);
         color: var(--text);
-        font-size: 0.85rem;
+        font-size: 0.95rem;
         outline: none;
-        transition: border-color 0.15s;
+        transition: border-color 0.15s, box-shadow 0.15s;
       }
       .project-search-input:focus {
         border-color: var(--focus-border);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-border) 20%, transparent);
       }
       .project-search-input::placeholder {
         color: var(--muted);
@@ -1917,86 +1970,155 @@ function renderProjectListPage(projects: ProjectInfo[]): string {
       }
       .project-search-icon {
         position: absolute;
-        left: 0.6rem;
+        left: 0.8rem;
         top: 50%;
         transform: translateY(-50%);
-        width: 14px;
-        height: 14px;
+        width: 16px;
+        height: 16px;
         color: var(--muted);
         pointer-events: none;
         opacity: 0.6;
       }
-      .project-quick-select {
+      .home-stats {
+        margin-bottom: 1rem;
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: var(--text);
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid var(--border);
+      }
+      .project-grid {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .project-card {
+        border-bottom: 1px solid var(--border);
+      }
+      .project-card:last-child {
+        border-bottom: none;
+      }
+      .project-card-link {
         display: flex;
         align-items: center;
-        gap: 0.5rem;
-        margin: 0 1.25rem 0.75rem;
+        gap: 1rem;
+        padding: 1rem 0.5rem;
+        text-decoration: none;
+        color: inherit;
+        border-radius: 6px;
+        transition: background 0.15s;
       }
-      .project-quick-select label {
-        font-size: 0.78rem;
+      .project-card-link:hover {
+        background: var(--list-hover);
+      }
+      .project-card[data-active="true"] .project-card-link {
+        background: var(--list-active);
+        box-shadow: inset 3px 0 0 var(--primary);
+      }
+      .project-card-icon {
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+      .project-card-content {
+        flex: 1;
+        min-width: 0;
+      }
+      .project-card-name {
+        font-size: 1rem;
+        font-weight: 500;
+        color: var(--text);
+        margin-bottom: 0.2rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .project-card-path {
+        font-size: 0.8rem;
         color: var(--muted);
         white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
-      .project-quick-select select {
-        flex: 1;
-        padding: 0.35rem 0.5rem;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        background: var(--bg);
-        color: var(--text);
-        font-size: 0.82rem;
-        outline: none;
-        cursor: pointer;
-      }
-      .project-quick-select select:focus {
-        border-color: var(--focus-border);
-      }
-      .file-item[data-hidden="true"] {
+      .project-card[data-hidden="true"] {
         display: none;
       }
-      .search-no-results {
+      .search-no-results, .file-empty {
+        text-align: center;
+        padding: 3rem 1rem;
         color: var(--muted);
-        padding: 0.75rem 1.25rem;
-        font-size: 13px;
+        font-size: 0.95rem;
+        background: var(--bg);
+        border: 1px dashed var(--border);
+        border-radius: 8px;
+        margin-top: 1rem;
+      }
+      .search-no-results {
         display: none;
       }
     </style>
   </head>
   <body>
-    <main class="browser-shell">
-      <header class="browser-header">
-        <h1>Preview Server</h1>
-        <p class="project-path">Select a project to browse</p>
+    <main class="home-container">
+      <header class="home-header">
+        <h1>Opencode Preview</h1>
+        <p>Select a project to browse and preview its files.</p>
       </header>
-      <div class="project-search-bar">
-        <svg class="project-search-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0zm-.82 4.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06l-3.04-3.04z"/></svg>
-        <input type="text" class="project-search-input" id="project-search" placeholder="Search projects..." autocomplete="off" />
-      </div>
-      <div class="project-quick-select">
-        <label for="project-jump">Jump to:</label>
-        <select id="project-jump">
-          <option value="">— select —</option>
-          ${projectOptions}
-        </select>
-      </div>
-      <section class="file-list-panel">
-        <div class="panel-title-row">
-          <h2>Projects</h2>
+      
+      <div class="home-controls">
+        <div class="project-search-bar">
+          <svg class="project-search-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0zm-.82 4.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06l-3.04-3.04z"/></svg>
+          <input type="text" class="project-search-input" id="project-search" placeholder="Search projects by name or path..." autocomplete="off" />
         </div>
-        <ul id="file-list" class="file-list">
-          <ul class="file-tree" style="padding:0.25rem 0.5rem" id="project-list">
-            ${projectItems || '<li class="file-empty">No projects found. Is opencode running?</li>'}
-          </ul>
-        </ul>
-        <div class="search-no-results" id="no-results">No matching projects found.</div>
-      </section>
+      </div>
+
+      <div class="home-stats" id="project-stats">
+        ${sortedProjects.length} ${sortedProjects.length === 1 ? 'Project' : 'Projects'}
+      </div>
+
+      <ul id="project-list" class="project-grid">
+        ${projectItems || '<li class="file-empty">No projects found. Is opencode running?</li>'}
+      </ul>
+      <div class="search-no-results" id="no-results">No matching projects found.</div>
     </main>
     <script>
       (() => {
         const searchInput = document.getElementById("project-search");
-        const jumpSelect = document.getElementById("project-jump");
-        const items = document.querySelectorAll("#project-list > .file-item");
+        const items = document.querySelectorAll("#project-list > .project-card");
         const noResults = document.getElementById("no-results");
+        const stats = document.getElementById("project-stats");
+        const total = items.length;
+        let activeIndex = 0;
+
+        const visibleItems = () => Array.from(items).filter(item => item.getAttribute("data-hidden") !== "true");
+
+        function setActive(index) {
+          const visible = visibleItems();
+          items.forEach(item => item.removeAttribute("data-active"));
+          if (visible.length === 0) {
+            activeIndex = -1;
+            return;
+          }
+          activeIndex = Math.max(0, Math.min(index, visible.length - 1));
+          const active = visible[activeIndex];
+          active.setAttribute("data-active", "true");
+          if (active.scrollIntoView) active.scrollIntoView({ block: "nearest" });
+        }
+
+        function openActive() {
+          const visible = visibleItems();
+          if (activeIndex < 0 || activeIndex >= visible.length) return;
+          const link = visible[activeIndex].querySelector("a.project-card-link");
+          if (link) link.click();
+        }
 
         searchInput.addEventListener("input", () => {
           const query = searchInput.value.toLowerCase().trim();
@@ -2009,12 +2131,33 @@ function renderProjectListPage(projects: ProjectInfo[]): string {
             if (match) visible++;
           });
           noResults.style.display = visible === 0 && query ? "block" : "none";
+          stats.textContent = query 
+            ? visible + " of " + total + " Projects" 
+            : total + (total === 1 ? " Project" : " Projects");
+          setActive(0);
         });
 
-        jumpSelect.addEventListener("change", () => {
-          const val = jumpSelect.value;
-          if (val) window.location.href = "/browse?project=" + val;
+        searchInput.addEventListener("keydown", (event) => {
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setActive(activeIndex + 1);
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setActive(activeIndex - 1);
+          } else if (event.key === "Enter") {
+            event.preventDefault();
+            openActive();
+          }
         });
+
+        items.forEach(item => {
+          item.addEventListener("mouseenter", () => {
+            const index = visibleItems().indexOf(item);
+            if (index >= 0) setActive(index);
+          });
+        });
+
+        setActive(0);
       })();
     </script>
   </body>

@@ -139,7 +139,7 @@ src/
 │   ├── html.ts        # Sandboxed iframe HTML preview
 │   └── markdown.ts    # GFM rendering via marked + word count + reading time
 └── templates/
-    ├── browser.html   # SPA shell template (project list fallback)
+    ├── browser.html   # Legacy standalone browser template
     └── styles.css     # Shared styles (light/dark themes)
 ```
 
