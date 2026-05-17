@@ -1,6 +1,7 @@
 import { type FSWatcher, watch } from "node:fs"
 import { readdir, readFile, stat } from "node:fs/promises"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
+import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
 import { WebSocket, WebSocketServer } from "ws"
@@ -45,7 +46,7 @@ const PROJECT_CACHE_TTL = 60_000
 function getAuthHeaders(): Record<string, string> {
   const pw = process.env.OPENCODE_SERVER_PASSWORD
   if (!pw) return {}
-  const user = process.env.OPENCODE_SERVER_USERNAME ?? "opencode"
+  const user = process.env.OPENCODE_SERVER_USERNAME || "opencode"
   return { Authorization: `Basic ${Buffer.from(`${user}:${pw}`).toString("base64")}` }
 }
 
@@ -174,7 +175,7 @@ export function ensureInsideRoot(rootDir: string, relativeFilePath: string): str
 
 // --- File system helpers ---
 
-const IGNORED_DIRS = new Set(["node_modules", ".git", "dist", ".next", "__pycache__", ".venv", "venv", ".opencode"])
+const IGNORED_DIRS = new Set(["node_modules", ".git", "dist", ".next", "__pycache__", ".venv", "venv"])
 
 async function collectPreviewFiles(directory: string, base = directory): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true })
@@ -194,6 +195,27 @@ async function collectPreviewFiles(directory: string, base = directory): Promise
     }),
   )
   return files.flat().sort((a, b) => a.localeCompare(b))
+}
+
+async function collectEmptyDirectories(directory: string, base = directory): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true })
+  const childDirectories = entries.filter((entry) => entry.isDirectory() && !IGNORED_DIRS.has(entry.name))
+  const nested = await Promise.all(
+    childDirectories.map(async (entry) => {
+      const absolutePath = path.join(directory, entry.name)
+      const childEntries = await readdir(absolutePath, { withFileTypes: true })
+      const childResults = await collectEmptyDirectories(absolutePath, base)
+      if (childEntries.length === 0) {
+        return [path.relative(base, absolutePath).split(path.sep).join("/"), ...childResults]
+      }
+      return childResults
+    }),
+  )
+  return nested.flat().sort((a, b) => a.localeCompare(b))
+}
+
+function isIgnoredTreePath(filePath: string): boolean {
+  return filePath.split("/").some((part) => IGNORED_DIRS.has(part))
 }
 
 async function findGitDir(baseDir: string): Promise<string> {
@@ -328,16 +350,25 @@ function gitStatusLabel(status: string): string {
 }
 
 async function runGit(rootDir: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  const proc = Bun.spawn(["git", "-C", rootDir, ...args], {
-    stdout: "pipe",
-    stderr: "pipe",
+  return new Promise((resolve) => {
+    const proc = spawn("git", ["-C", rootDir, ...args], {
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+    const stdoutChunks: Buffer[] = []
+    const stderrChunks: Buffer[] = []
+    proc.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk))
+    proc.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk))
+    proc.on("error", (error) => {
+      resolve({ code: 1, stdout: "", stderr: error.message })
+    })
+    proc.on("close", (code) => {
+      resolve({
+        code: code ?? 1,
+        stdout: Buffer.concat(stdoutChunks).toString("utf-8"),
+        stderr: Buffer.concat(stderrChunks).toString("utf-8"),
+      })
+    })
   })
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
-  return { code, stdout, stderr }
 }
 
 function normalizeGitPath(rawPath: string): string {
@@ -450,8 +481,46 @@ async function gitShow(rootDir: string, commitHash: string): Promise<CommitDetai
   return { hash, author, date, message, diff }
 }
 
-async function gitStatus(rootDir: string): Promise<GitFileStatus[]> {
-  const result = await runGit(rootDir, ["status", "--porcelain=v1", "-uall"])
+
+async function isGitWorkTree(rootDir: string): Promise<boolean> {
+  const result = await runGit(rootDir, ["rev-parse", "--is-inside-work-tree"])
+  return result.code === 0 && result.stdout.trim() === "true"
+}
+
+async function getFileCommitInfos(rootDir: string, files: string[]): Promise<Map<string, string>> {
+  const commitMap = new Map<string, string>()
+  if (files.length === 0 || !(await isGitWorkTree(rootDir))) {
+    return commitMap
+  }
+
+  const batchSize = 50
+  for (let i = 0; i < files.length; i += batchSize) {
+    const batch = files.slice(i, i + batchSize)
+    const batchSet = new Set(batch)
+    const result = await runGit(rootDir, ["-c", "core.quotePath=false", "log", "--name-only", "--format=%x1e%h - %s", "--", ...batch])
+    if (result.code !== 0) {
+      continue
+    }
+
+    const records = result.stdout.split("\x1e").filter((record) => record.trim())
+    for (const record of records) {
+      const [commitInfo, ...changedFiles] = record.trim().split(/\r?\n/).filter(Boolean)
+      if (!commitInfo) continue
+      for (const changedFile of changedFiles) {
+        const normalizedPath = normalizeGitPath(changedFile)
+        if (batchSet.has(normalizedPath) && !commitMap.has(normalizedPath)) {
+          commitMap.set(normalizedPath, commitInfo)
+        }
+      }
+    }
+  }
+  return commitMap
+}
+
+async function gitStatus(rootDir: string, options: { includeIgnored?: boolean } = {}): Promise<GitFileStatus[]> {
+  const args = ["-c", "core.quotePath=false", "status", "--porcelain=v1", "-uall"]
+  if (options.includeIgnored) args.push("--ignored")
+  const result = await runGit(rootDir, args)
   if (result.code !== 0) return []
 
   const files: GitFileStatus[] = []
@@ -488,7 +557,7 @@ async function gitDiff(rootDir: string, filePath: string): Promise<string> {
   // Validate path for ALL files (tracked and untracked) to prevent path traversal
   const absolutePath = ensureInsideRoot(rootDir, filePath)
 
-  const statusResult = await runGit(rootDir, ["status", "--porcelain=v1", "-uall", "--", filePath])
+  const statusResult = await runGit(rootDir, ["-c", "core.quotePath=false", "status", "--porcelain=v1", "-uall", "--", filePath])
   if (statusResult.code !== 0) {
     throw new Error(statusResult.stderr || "Failed to query git status")
   }
@@ -554,6 +623,24 @@ function broadcastChange(changedDir: string): void {
   }
 }
 
+function watchPreviewDirectory(dir: string, directory: string, recursive: boolean): FSWatcher | null {
+  try {
+    const watcher = watch(directory, { recursive }, (_, filename) => {
+      if (!filename || !isPreviewable(filename)) return
+      broadcastChange(dir)
+    })
+    watcher.on("error", (error) => {
+      console.warn(`[opencode-preview] File watcher disabled for ${directory}:`, error.message)
+      watcher.close()
+    })
+    return watcher
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn(`[opencode-preview] Failed to watch ${directory}:`, message)
+    return null
+  }
+}
+
 async function ensureWatchers(dir: string): Promise<void> {
   const existing = dirWatchers.get(dir)
   if (existing) {
@@ -562,20 +649,14 @@ async function ensureWatchers(dir: string): Promise<void> {
   }
 
   const watcherList: FSWatcher[] = []
-  try {
-    const recursiveWatcher = watch(dir, { recursive: true }, (_, filename) => {
-      if (!filename || !isPreviewable(filename)) return
-      broadcastChange(dir)
-    })
+  const recursiveWatcher = watchPreviewDirectory(dir, dir, true)
+  if (recursiveWatcher) {
     watcherList.push(recursiveWatcher)
-  } catch {
+  } else {
     const directories = await listDirectories(dir)
     for (const d of directories) {
-      const watcher = watch(d, (_, filename) => {
-        if (!filename || !isPreviewable(filename)) return
-        broadcastChange(dir)
-      })
-      watcherList.push(watcher)
+      const watcher = watchPreviewDirectory(dir, d, false)
+      if (watcher) watcherList.push(watcher)
     }
   }
   dirWatchers.set(dir, { watchers: watcherList, refCount: 1 })
@@ -616,9 +697,9 @@ function fileIconSvg(filePath: string): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16"><path fill="${color}" d="M13.85 4.44l-3.28-3.3c-.19-.18-.43-.28-.71-.28H3.5c-.55 0-1 .45-1 1v12.28c0 .55.45 1 1 1h9c.55 0 1-.45 1-1V5.14c0-.26-.1-.51-.28-.7zM9.5 2.56L12.06 5H9.5V2.56zM12.5 14h-9V2.5h5V5.5h3.5v8.5z"/><text x="8" y="11" font-size="5" font-family="sans-serif" font-weight="bold" fill="${color}" text-anchor="middle">${text}</text></svg>`
 }
 
-interface FileTreeNode { [key: string]: string | FileTreeNode }
+interface FileTreeNode { [key: string]: string | FileTreeNode | null }
 
-function buildFileTree(files: string[]): FileTreeNode {
+function buildFileTree(files: string[], emptyDirectories: string[]): FileTreeNode {
   const root: FileTreeNode = {}
   for (const file of files) {
     const parts = file.split("/")
@@ -629,23 +710,77 @@ function buildFileTree(files: string[]): FileTreeNode {
       else { if (!cursor[part] || typeof cursor[part] === "string") cursor[part] = {}; cursor = cursor[part] as FileTreeNode }
     }
   }
+  for (const directory of emptyDirectories) {
+    const parts = directory.split("/")
+    let cursor = root
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]
+      if (i === parts.length - 1) {
+        if (!cursor[part]) cursor[part] = null
+      } else {
+        if (!cursor[part] || typeof cursor[part] === "string") cursor[part] = {}
+        cursor = cursor[part] as FileTreeNode
+      }
+    }
+  }
   return root
 }
 
-function renderFileTreeHtml(node: FileTreeNode, projectId: string, worktreeParams: string, currentFile: string, parentPath = ""): string {
+function isUntrackedTreeNode(node: string | FileTreeNode | null, gitFilesMap: Map<string, GitFileStatus>, folderPath = ""): boolean {
+  if (node === null) {
+    return true
+  }
+  if (typeof node === "string") {
+    const status = gitFilesMap.get(node)?.status
+    return status === "?" || status === "!"
+  }
+  const folderStatus = folderPath ? gitFilesMap.get(folderPath)?.status : undefined
+  if (folderStatus === "?" || folderStatus === "!") {
+    return true
+  }
+  const children = Object.entries(node)
+  return children.length > 0 && children.every(([name, child]) => {
+    const childPath = folderPath ? `${folderPath}/${name}` : name
+    return isUntrackedTreeNode(child, gitFilesMap, childPath)
+  })
+}
+
+function renderFileTreeHtml(
+  node: FileTreeNode,
+  projectId: string,
+  worktreeParams: string,
+  currentFile: string,
+  gitFilesMap: Map<string, GitFileStatus>,
+  commitMap: Map<string, string>,
+  parentPath = "",
+): string {
   const entries = Object.entries(node).sort(([a], [b]) => a.localeCompare(b))
   const items = entries.map(([name, value]) => {
+    if (value === null) {
+      const folderPath = parentPath ? `${parentPath}/${name}` : name
+      return `<li class="folder-item folder-item-untracked folder-item-empty"><details data-folder-path="${escapeHtml(folderPath)}"><summary><span class="folder-name">${escapeHtml(name)}</span></summary></details></li>`
+    }
     if (typeof value === "string") {
       let href = `/preview?project=${encodeURIComponent(projectId)}&file=${encodeURIComponent(value)}`
       if (worktreeParams) href += `&${worktreeParams}`
       const active = value === currentFile ? " active" : ""
-      return `<li class="file-item"><a href="${href}" class="file-link${active}" data-tooltip="${escapeHtml(value)}"><span class="file-icon">${fileIconSvg(value)}</span><span class="file-path">${escapeHtml(name)}</span></a></li>`
+
+      const gitStatus = gitFilesMap.get(value)
+      const isUntracked = gitStatus?.status === "?" || gitStatus?.status === "!"
+      const itemClass = isUntracked ? " file-item-untracked" : ""
+      const commitInfo = commitMap.get(value)
+      const commitMetaHtml = commitInfo ? `<span class="file-commit-info" title="${escapeHtml(commitInfo)}">${escapeHtml(commitInfo)}</span>` : ""
+      const tooltip = escapeHtml(value) + (commitInfo ? ` &#10;${escapeHtml(commitInfo)}` : "")
+
+      return `<li class="file-item${itemClass}"><a href="${href}" class="file-link${active}" data-file-path="${escapeHtml(value)}" data-tooltip="${tooltip}"><span class="file-icon">${fileIconSvg(value)}</span><span class="file-path">${escapeHtml(name)}</span>${commitMetaHtml}</a></li>`
     }
     const folderPath = parentPath ? `${parentPath}/${name}` : name
     const hasActive = currentFile && JSON.stringify(value).includes(JSON.stringify(currentFile).slice(1, -1))
     const open = hasActive ? " open" : ""
-    const inner = renderFileTreeHtml(value as FileTreeNode, projectId, worktreeParams, currentFile, folderPath)
-    return `<li class="folder-item"><details data-folder-path="${escapeHtml(folderPath)}"${open}><summary>${escapeHtml(name)}</summary>${inner}</details></li>`
+    const isUntrackedFolder = isUntrackedTreeNode(value, gitFilesMap, folderPath)
+    const itemClass = isUntrackedFolder ? " folder-item-untracked" : ""
+    const inner = renderFileTreeHtml(value, projectId, worktreeParams, currentFile, gitFilesMap, commitMap, folderPath)
+    return `<li class="folder-item${itemClass}"><details data-folder-path="${escapeHtml(folderPath)}"${open}><summary><span class="folder-name">${escapeHtml(name)}</span></summary>${inner}</details></li>`
   })
   return `<ul class="file-tree">${items.join("")}</ul>`
 }
@@ -655,6 +790,7 @@ const CHEVRON_SVG = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"
 const CHECK_SVG = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3.5 7L6 9.5L10.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 const COPY_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4.5 3A1.5 1.5 0 0 1 6 1.5h5.5a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 11V3z" stroke="currentColor" stroke-width="1.3"/><path d="M3 4.5h-.5A1.5 1.5 0 0 0 1 6v7.5A1.5 1.5 0 0 0 2.5 15H10a1.5 1.5 0 0 0 1.5-1.5V13" stroke="currentColor" stroke-width="1.3"/></svg>'
 const FOLDER_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3.38a1 1 0 0 1 .72.3L8.42 3.7a1 1 0 0 0 .72.3H13a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5H3A1.5 1.5 0 0 1 1.5 12.5v-9z" stroke="currentColor" stroke-width="1.2"/></svg>'
+const HOME_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 2.5L1.5 8M8 2.5l6.5 5.5M3.5 6.5v7h3v-4h3v4h3v-7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 
 function renderWorktreeSwitcherHtml(worktrees: WorktreeInfo[], activeWt: string, projectId: string, defaultBranch: string): string {
   if (worktrees.length === 0) return ""
@@ -692,7 +828,8 @@ function renderCopyPathHtml(rootDir: string, projectId: string, projects: Projec
 
   const switcher = `<div class="project-switcher" id="sidebar-project-switcher"><button class="copy-path-project project-trigger" type="button" aria-expanded="false" title="${escapeHtml(rootDir)}">${FOLDER_SVG}<span class="copy-path-name">${escapeHtml(projectName)}</span><span class="project-trigger-chevron">${CHEVRON_SVG}</span></button><div class="wt-dropdown project-dropdown" data-open="false">${searchHtml}${optionItems}${emptyHtml}</div></div>`
 
-  return `<div class="copy-path-row">${switcher}<button class="copy-path-btn" id="copy-path-btn" type="button" title="${escapeHtml(rootDir)}">${COPY_SVG}<span>Copy Path</span></button></div>`
+  const homeBtn = `<a class="sidebar-home-btn" href="/" title="Projects Home" aria-label="Projects Home">${HOME_SVG}</a>`
+  return `<div class="copy-path-row">${homeBtn}${switcher}<button class="copy-path-btn" id="copy-path-btn" type="button" title="${escapeHtml(rootDir)}">${COPY_SVG}<span>Copy Path</span></button></div>`
 }
 
 async function renderSidebarHtml(
@@ -703,26 +840,42 @@ async function renderSidebarHtml(
   projectRootDir: string,
   rootDir: string,
 ): Promise<string> {
-  const [files, worktrees, changesSidebar, projects, defaultBranch] = await Promise.all([
+  const [previewFiles, emptyDirectories, worktrees, gitFiles, ignoredGitFiles, projects, defaultBranch] = await Promise.all([
     collectPreviewFiles(rootDir),
+    collectEmptyDirectories(rootDir),
     listWorktrees(projectRootDir),
-    renderChangesSidebarHtml(projectId, worktreeParams, rootDir, currentDiff),
+    gitStatus(rootDir),
+    gitStatus(rootDir, { includeIgnored: true }),
     fetchProjects(),
     getCurrentBranch(projectRootDir),
   ])
+  const gitFilesMap = new Map(ignoredGitFiles.map((f) => [f.path, f]))
+  const untrackedFiles = gitFiles
+    .filter((f) => f.status === "?")
+    .map((f) => f.path)
+    .filter((filePath) => !isIgnoredTreePath(filePath))
+  const untrackedFileSet = new Set(untrackedFiles)
+  const files = [...new Set([...previewFiles, ...untrackedFiles])].sort((a, b) => a.localeCompare(b))
+  const untrackedDirectories = emptyDirectories.filter((directory) => !isIgnoredTreePath(directory))
+  const trackedFiles = files.filter((f) => !untrackedFileSet.has(f))
+  const commitMap = await getFileCommitInfos(rootDir, trackedFiles)
+
+  const changesSidebarHtml = renderChangesListHtml(projectId, worktreeParams, gitFiles, currentDiff)
+  const changesCount = gitFiles.length
+
   const activeWt = new URLSearchParams(worktreeParams).get("worktree") || ""
   const wtHtml = renderWorktreeSwitcherHtml(worktrees, activeWt, projectId, defaultBranch)
   const cpHtml = renderCopyPathHtml(rootDir, projectId, projects)
-  const treeHtml = files.length === 0
+  const treeHtml = files.length === 0 && untrackedDirectories.length === 0
     ? '<div class="sidebar-loading">No files found.</div>'
-    : renderFileTreeHtml(buildFileTree(files), projectId, worktreeParams, currentFile)
-  const changesHtml = changesSidebar.html
+    : renderFileTreeHtml(buildFileTree(files, untrackedDirectories), projectId, worktreeParams, currentFile, gitFilesMap, commitMap)
+  const changesHtml = changesSidebarHtml
   const defaultTab = currentDiff ? "changes" : "files"
 
   return `${wtHtml}${cpHtml}
   <div class="sidebar-tabs" id="sidebar-tabs">
     <button class="sidebar-tab${defaultTab === "files" ? " active" : ""}" data-tab="files" type="button">Files</button>
-    <button class="sidebar-tab${defaultTab === "changes" ? " active" : ""}" data-tab="changes" type="button">Changes <span class="changes-count">${changesSidebar.count}</span></button>
+    <button class="sidebar-tab${defaultTab === "changes" ? " active" : ""}" data-tab="changes" type="button">Changes <span class="changes-count">${changesCount}</span></button>
     <button class="sidebar-tab" data-tab="commits" type="button">Commits</button>
   </div>
   <div class="sidebar-panel${defaultTab === "files" ? " active" : ""}" data-panel="files"><div class="sidebar-search-bar"><svg class="sidebar-search-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0zm-.82 4.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06l-3.04-3.04z"/></svg><input type="text" class="sidebar-search-input" id="sidebar-file-search" placeholder="Search files..." autocomplete="off" /><kbd class="sidebar-search-kbd" id="sidebar-search-kbd">Ctrl P</kbd></div>${treeHtml}</div>
@@ -757,19 +910,6 @@ function renderChangesListHtml(
   })
 
   return `<ul class="changes-list">${items.join("")}</ul>`
-}
-
-async function renderChangesSidebarHtml(
-  projectId: string,
-  worktreeParams: string,
-  rootDir: string,
-  currentDiff = "",
-): Promise<{ html: string; count: number }> {
-  const files = await gitStatus(rootDir)
-  return {
-    html: renderChangesListHtml(projectId, worktreeParams, files, currentDiff),
-    count: files.length,
-  }
 }
 
 // --- Shell page (SPA) ---
@@ -1165,7 +1305,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       var matchedFiles = new Set();
       allItems.forEach(function(li) {
         var link = li.querySelector("a.file-link");
-        var filePath = link ? (link.getAttribute("data-tooltip") || "").toLowerCase() : "";
+        var filePath = link ? (link.getAttribute("data-file-path") || "").toLowerCase() : "";
         var fileName = filePath.split("/").pop() || "";
         var matched = filePath.includes(lowerQuery) || fuzzyMatch(fileName, lowerQuery);
         if (matched) { li.classList.remove("search-hidden"); matchedFiles.add(li); }
@@ -2164,6 +2304,7 @@ function renderProjectListPage(projects: ProjectInfo[]): string {
 </html>`
 }
 
+
 // --- Browser page ---
 
 const BROWSE_EMPTY_BODY = `<div class="browse-empty">
@@ -2192,6 +2333,10 @@ async function renderContent(projectId: string, rootDir: string, wtParams: strin
   const absolutePath = ensureInsideRoot(rootDir, filePath)
   const fileStat = await stat(absolutePath)
   if (!fileStat.isFile()) {
+    return { title: "Preview Browser", body: BROWSE_EMPTY_BODY, contentClass: "preview-content" }
+  }
+
+  if (!isPreviewable(absolutePath)) {
     return { title: "Preview Browser", body: BROWSE_EMPTY_BODY, contentClass: "preview-content" }
   }
 

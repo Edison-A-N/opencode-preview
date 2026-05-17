@@ -12,6 +12,9 @@
   --list-active: #e4e6f1;
   --indent-guide: #cccccc;
   --focus-border: #0090f1;
+  --untracked-bg: rgba(140, 149, 159, 0.08);
+  --untracked-border: rgba(140, 149, 159, 0.4);
+  --untracked-text: #717d8a;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -28,6 +31,9 @@
     --list-active: #37373d;
     --indent-guide: #404040;
     --focus-border: #007fd4;
+    --untracked-bg: rgba(140, 149, 159, 0.12);
+    --untracked-border: rgba(140, 149, 159, 0.35);
+    --untracked-text: #8792a0;
   }
 }
 
@@ -492,6 +498,32 @@ button:hover {
   transform: rotate(90deg);
 }
 
+.folder-item-untracked > details > summary {
+  color: var(--untracked-text);
+  font-style: italic;
+  background-color: var(--untracked-bg);
+  box-shadow: inset 2px 0 0 var(--untracked-border);
+}
+
+.folder-item-untracked > details > summary:hover,
+.folder-item-untracked > details[open] > summary {
+  color: var(--untracked-text);
+}
+
+.folder-item-untracked > details > summary:hover {
+  background-color: var(--list-hover);
+}
+
+.folder-item-untracked > details > summary::before {
+  opacity: 0.35;
+}
+
+.folder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .file-item a {
   display: flex;
   align-items: center;
@@ -506,6 +538,32 @@ button:hover {
 .file-item a.active {
   background-color: var(--list-active);
   color: var(--text);
+}
+
+.file-item-untracked a {
+  color: var(--untracked-text);
+  font-style: italic;
+  background-color: var(--untracked-bg);
+  box-shadow: inset 2px 0 0 var(--untracked-border);
+}
+
+.file-item-untracked a:hover,
+.file-item-untracked a.active {
+  color: var(--untracked-text);
+}
+
+.file-item-untracked a:hover {
+  background-color: var(--list-hover);
+}
+
+.file-item-untracked a.active {
+  background-color: var(--list-active);
+}
+
+.file-item-untracked .file-icon,
+.file-item-untracked .file-commit-info {
+  filter: grayscale(1);
+  opacity: 0.5;
 }
 
 /* --- Custom instant tooltip for file paths --- */
@@ -528,7 +586,7 @@ button:hover {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06);
   font-size: 12px;
   line-height: 1.4;
-  white-space: nowrap;
+  white-space: pre;
   pointer-events: none;
   opacity: 0;
   z-index: 100;
@@ -583,6 +641,20 @@ button:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+
+.file-commit-info {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 8px;
+  opacity: 0.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 0%;
+  min-width: 0;
+  text-align: right;
 }
 
 .file-empty {
@@ -1612,4 +1684,24 @@ button:hover {
 
 .commits-placeholder {
   cursor: pointer;
+}
+
+.sidebar-home-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0.2rem 0.45rem;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  text-decoration: none;
+  background: transparent;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.sidebar-home-btn:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--list-hover);
 }
