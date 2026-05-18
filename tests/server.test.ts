@@ -35,6 +35,7 @@ describe("isPreviewable", () => {
     expect(isPreviewable("app.go")).toBe(true)
     expect(isPreviewable("style.css")).toBe(true)
     expect(isPreviewable("config.json")).toBe(true)
+    expect(isPreviewable("Cargo.lock")).toBe(true)
   })
 
   test("accepts special filenames", () => {
@@ -203,5 +204,13 @@ describe("renderFileTreeHtml", () => {
     expect(bFolderIndex).toBeLessThan(cEmptyIndex)
     expect(cEmptyIndex).toBeLessThan(aFileIndex)
     expect(aFileIndex).toBeLessThan(zFileIndex)
+  })
+
+  test("renders Material icons for special file types", () => {
+    const result = renderFileTreeHtmlForTest(["Dockerfile", "README.md", "yarn.lock"])
+
+    expect(result).toContain('fill="#0288d1"')
+    expect(result).toContain('fill="#42a5f5"')
+    expect(result).toContain('fill="#ffd54f"')
   })
 })

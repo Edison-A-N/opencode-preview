@@ -6,6 +6,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { WebSocket, WebSocketServer } from "ws"
 
+import { getFileIconSvg } from "./file-icons"
 import { renderCodeBody } from "./renderers/code"
 import { renderCsvBody } from "./renderers/csv"
 import { renderCommitDiff, renderDiffBody } from "./renderers/diff"
@@ -175,6 +176,7 @@ const CODE_EXTENSIONS: Record<string, string> = {
   ".conf": "ini",
   ".env": "bash",
   ".gitignore": "plaintext",
+  ".lock": "plaintext",
   ".editorconfig": "ini",
 }
 
@@ -186,6 +188,7 @@ const SPECIAL_FILENAMES: Record<string, string> = {
   Gemfile: "ruby",
   Rakefile: "ruby",
   Justfile: "makefile",
+  "bun.lockb": "plaintext",
 }
 
 export function isPreviewable(filePath: string): boolean {
@@ -717,23 +720,8 @@ function safeProjectIconColor(color: string | undefined): string {
 
 // --- Server-side sidebar rendering ---
 
-const ICON_COLORS: Record<string, [string, string]> = {
-  ".ts": ["#3178c6", "TS"], ".tsx": ["#3178c6", "TX"],
-  ".js": ["#f1e05a", "JS"], ".cjs": ["#f1e05a", "JS"], ".mjs": ["#f1e05a", "JS"],
-  ".jsx": ["#f1e05a", "JX"],
-  ".html": ["#e34f26", "<>"], ".htm": ["#e34f26", "<>"],
-  ".css": ["#1572b6", "#"], ".json": ["#cbcb41", "{}"],
-  ".md": ["#42a5f5", "M↓"], ".py": ["#3572A5", "PY"],
-  ".go": ["#00ADD8", "GO"], ".rs": ["#dea584", "RS"],
-  ".drawio": ["#f08705", "D"], ".csv": ["#217346", "CSV"],
-}
-
 function fileIconSvg(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase()
-  const match = ICON_COLORS[ext]
-  const color = match ? match[0] : "#519aba"
-  const text = match ? match[1] : ext.replace(".", "").substring(0, 2).toUpperCase() || "F"
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16"><path fill="${color}" d="M13.85 4.44l-3.28-3.3c-.19-.18-.43-.28-.71-.28H3.5c-.55 0-1 .45-1 1v12.28c0 .55.45 1 1 1h9c.55 0 1-.45 1-1V5.14c0-.26-.1-.51-.28-.7zM9.5 2.56L12.06 5H9.5V2.56zM12.5 14h-9V2.5h5V5.5h3.5v8.5z"/><text x="8" y="11" font-size="5" font-family="sans-serif" font-weight="bold" fill="${color}" text-anchor="middle">${text}</text></svg>`
+  return getFileIconSvg(filePath)
 }
 
 interface FileTreeNode { [key: string]: string | FileTreeNode | null }
