@@ -871,7 +871,7 @@ function renderCopyPathHtml(rootDir: string, projectId: string, projects: Projec
   const switcher = `<div class="project-switcher" id="sidebar-project-switcher"><button class="copy-path-project project-trigger" type="button" aria-expanded="false" title="${escapeHtml(rootDir)}">${FOLDER_SVG}<span class="copy-path-name">${escapeHtml(projectName)}</span><span class="project-trigger-chevron">${CHEVRON_SVG}</span></button><div class="wt-dropdown project-dropdown" data-open="false">${searchHtml}${optionItems}${emptyHtml}</div></div>`
 
   const homeBtn = `<a class="sidebar-home-btn" href="/" title="Projects Home" aria-label="Projects Home">${HOME_SVG}</a>`
-  return `<div class="copy-path-row">${homeBtn}${switcher}<button class="copy-path-btn" id="copy-path-btn" type="button" title="${escapeHtml(rootDir)}">${COPY_SVG}<span>Copy Path</span></button></div>`
+  return `<div class="copy-path-row">${homeBtn}${switcher}<button class="copy-path-btn" id="copy-path-btn" type="button" title="${escapeHtml(rootDir)}">${COPY_SVG}<span>Copy Path</span></button><button id="sidebar-collapse-btn" class="sidebar-collapse-btn" type="button" title="Collapse Sidebar"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M2 3.75C2 2.784 2.784 2 3.75 2h8.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5Zm1.75-.25a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25h-8.5ZM5.5 4v8h-1.5a.25.25 0 0 1-.25-.25v-8.5c0-.138.112-.25.25-.25H5.5Z"></path></svg></button></div>`
 }
 
 export function renderCopyPathHtmlForTest(rootDir: string, projectId: string, projects: ProjectInfo[]): string {
@@ -979,11 +979,22 @@ async function renderShellPage(projectId: string, worktreeParams: string, rootDi
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css" media="(prefers-color-scheme: light)" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css" media="(prefers-color-scheme: dark)" />
   <script>
-(function(){var s=localStorage.getItem("preview-sidebar-width");if(s){var w=parseInt(s,10);if(w>=160&&w<=window.innerWidth*0.5)document.documentElement.style.setProperty("--sidebar-w",w+"px")}})();
+(function(){
+  var s=localStorage.getItem("preview-sidebar-width");
+  if(s){var w=parseInt(s,10);if(w>=160&&w<=window.innerWidth*0.5)document.documentElement.style.setProperty("--sidebar-w",w+"px")}
+})();
   </script>
 </head>
 <body>
-  <div class="preview-layout">
+  <div class="preview-layout" id="preview-layout">
+    <script>
+      (function(){
+        if(localStorage.getItem("preview-sidebar-collapsed")==="true") {
+          document.getElementById("preview-layout").classList.add("sidebar-collapsed");
+        }
+      })();
+    </script>
+    <div class="sidebar-rail" id="sidebar-rail"><button id="sidebar-expand-btn" class="sidebar-toggle-btn" type="button" title="Expand Sidebar"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M2 3.75C2 2.784 2.784 2 3.75 2h8.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5Zm1.75-.25a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25h-8.5ZM5.5 4v8h-1.5a.25.25 0 0 1-.25-.25v-8.5c0-.138.112-.25.25-.25H5.5Z"></path></svg></button></div>
     <nav id="preview-sidebar" class="preview-sidebar">${sidebarHtml}</nav>
     <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
     <div class="preview-main-area">
@@ -1247,6 +1258,20 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       history.replaceState(null, "", "/browse?" + params.toString());
     }
   }
+
+  // --- sidebar toggle ---
+  (function() {
+    var expandBtn = document.getElementById("sidebar-expand-btn");
+    var collapseBtn = document.getElementById("sidebar-collapse-btn");
+    var layout = document.getElementById("preview-layout");
+    var KEY = "preview-sidebar-collapsed";
+    function toggleSidebar() {
+      var isCollapsed = layout.classList.toggle("sidebar-collapsed");
+      localStorage.setItem(KEY, isCollapsed ? "true" : "false");
+    }
+    if (expandBtn) expandBtn.addEventListener("click", toggleSidebar);
+    if (collapseBtn) collapseBtn.addEventListener("click", toggleSidebar);
+  })();
 
   // --- sidebar resize ---
   (function() {
