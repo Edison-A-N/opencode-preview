@@ -1,11 +1,17 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises"
+import { describe, expect, test } from "bun:test"
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { describe, expect, test } from "bun:test"
 import { renderCodeBody } from "../src/renderers/code"
 import { renderHtmlBody } from "../src/renderers/html"
 import { renderMarkdownBody } from "../src/renderers/markdown"
-import { ensureInsideRoot, getCodeLanguage, getCurrentBranch, isPreviewable } from "../src/server"
+import {
+  ensureInsideRoot,
+  getCodeLanguage,
+  getCurrentBranch,
+  isPreviewable,
+  renderCopyPathHtmlForTest,
+} from "../src/server"
 
 describe("isPreviewable", () => {
   test("accepts markdown files", () => {
@@ -160,5 +166,17 @@ describe("renderHtmlBody", () => {
     const result = renderHtmlBody("proj-id", "page.html", "")
     expect(result).toContain("HTML Preview")
     expect(result).toContain('class="html-badge"')
+  })
+})
+
+
+describe("renderCopyPathHtml", () => {
+  test("shows project name when browsing a linked worktree", () => {
+    const result = renderCopyPathHtmlForTest("/tmp/2026-05-17-sandbox-runtime", "proj-id", [
+      { id: "proj-id", name: "eager-cactus", worktree: "/home/user/eager-cactus" },
+    ])
+
+    expect(result).toContain('<span class="copy-path-name">eager-cactus</span>')
+    expect(result).toContain('title="/tmp/2026-05-17-sandbox-runtime"')
   })
 })

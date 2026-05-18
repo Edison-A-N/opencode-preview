@@ -1,9 +1,9 @@
+import { spawn } from "node:child_process"
 import { type FSWatcher, watch } from "node:fs"
 import { readdir, readFile, stat } from "node:fs/promises"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import { spawn } from "node:child_process"
-import { fileURLToPath } from "node:url"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { WebSocket, WebSocketServer } from "ws"
 
 import { renderCodeBody } from "./renderers/code"
@@ -13,7 +13,8 @@ import { countDiagramPages } from "./renderers/drawio"
 import { renderHtmlBody } from "./renderers/html"
 import { renderMarkdownBody } from "./renderers/markdown"
 
-const __dirname = (import.meta as any).dir ?? path.dirname(fileURLToPath(import.meta.url))
+const moduleMeta = import.meta as ImportMeta & { dir?: string }
+const __dirname = moduleMeta.dir ?? path.dirname(fileURLToPath(import.meta.url))
 const TEMPLATES_DIR = path.join(__dirname, "templates")
 
 let _stylesCss: string | undefined
@@ -810,7 +811,8 @@ function renderWorktreeSwitcherHtml(worktrees: WorktreeInfo[], activeWt: string,
 }
 
 function renderCopyPathHtml(rootDir: string, projectId: string, projects: ProjectInfo[]): string {
-  const projectName = rootDir.split("/").filter(Boolean).pop() || rootDir
+  const activeProject = projects.find((p) => p.id === projectId)
+  const projectName = activeProject?.name ?? (activeProject ? path.basename(activeProject.worktree) : path.basename(rootDir))
 
   const sorted = [...projects].sort((a, b) =>
     (a.name ?? path.basename(a.worktree)).localeCompare(b.name ?? path.basename(b.worktree)),
@@ -830,6 +832,10 @@ function renderCopyPathHtml(rootDir: string, projectId: string, projects: Projec
 
   const homeBtn = `<a class="sidebar-home-btn" href="/" title="Projects Home" aria-label="Projects Home">${HOME_SVG}</a>`
   return `<div class="copy-path-row">${homeBtn}${switcher}<button class="copy-path-btn" id="copy-path-btn" type="button" title="${escapeHtml(rootDir)}">${COPY_SVG}<span>Copy Path</span></button></div>`
+}
+
+export function renderCopyPathHtmlForTest(rootDir: string, projectId: string, projects: ProjectInfo[]): string {
+  return renderCopyPathHtml(rootDir, projectId, projects)
 }
 
 async function renderSidebarHtml(
