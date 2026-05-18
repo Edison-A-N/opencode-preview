@@ -11,6 +11,7 @@ import {
   getCurrentBranch,
   isPreviewable,
   renderCopyPathHtmlForTest,
+  renderFileTreeHtmlForTest,
 } from "../src/server"
 
 describe("isPreviewable", () => {
@@ -169,7 +170,6 @@ describe("renderHtmlBody", () => {
   })
 })
 
-
 describe("renderCopyPathHtml", () => {
   test("shows project name when browsing a linked worktree", () => {
     const result = renderCopyPathHtmlForTest("/tmp/2026-05-17-sandbox-runtime", "proj-id", [
@@ -178,5 +178,30 @@ describe("renderCopyPathHtml", () => {
 
     expect(result).toContain('<span class="copy-path-name">eager-cactus</span>')
     expect(result).toContain('title="/tmp/2026-05-17-sandbox-runtime"')
+  })
+})
+
+describe("renderFileTreeHtml", () => {
+  test("sorts folders before files while preserving name order within each group", () => {
+    const result = renderFileTreeHtmlForTest(
+      ["z-file.md", "a-file.md", "b-folder/readme.md", "a-folder/readme.md"],
+      ["c-empty"],
+    )
+
+    const aFolderIndex = result.indexOf('data-folder-path="a-folder"')
+    const bFolderIndex = result.indexOf('data-folder-path="b-folder"')
+    const cEmptyIndex = result.indexOf('data-folder-path="c-empty"')
+    const aFileIndex = result.indexOf('data-file-path="a-file.md"')
+    const zFileIndex = result.indexOf('data-file-path="z-file.md"')
+
+    expect(aFolderIndex).toBeGreaterThan(-1)
+    expect(bFolderIndex).toBeGreaterThan(-1)
+    expect(cEmptyIndex).toBeGreaterThan(-1)
+    expect(aFileIndex).toBeGreaterThan(-1)
+    expect(zFileIndex).toBeGreaterThan(-1)
+    expect(aFolderIndex).toBeLessThan(bFolderIndex)
+    expect(bFolderIndex).toBeLessThan(cEmptyIndex)
+    expect(cEmptyIndex).toBeLessThan(aFileIndex)
+    expect(aFileIndex).toBeLessThan(zFileIndex)
   })
 })

@@ -700,6 +700,20 @@ function fileIconSvg(filePath: string): string {
 
 interface FileTreeNode { [key: string]: string | FileTreeNode | null }
 
+function compareFileTreeEntries(
+  [nameA, valueA]: [string, string | FileTreeNode | null],
+  [nameB, valueB]: [string, string | FileTreeNode | null],
+): number {
+  const aIsFolder = typeof valueA !== "string"
+  const bIsFolder = typeof valueB !== "string"
+
+  if (aIsFolder !== bIsFolder) {
+    return aIsFolder ? -1 : 1
+  }
+
+  return nameA.localeCompare(nameB)
+}
+
 function buildFileTree(files: string[], emptyDirectories: string[]): FileTreeNode {
   const root: FileTreeNode = {}
   for (const file of files) {
@@ -755,7 +769,7 @@ function renderFileTreeHtml(
   commitMap: Map<string, string>,
   parentPath = "",
 ): string {
-  const entries = Object.entries(node).sort(([a], [b]) => a.localeCompare(b))
+  const entries = Object.entries(node).sort(compareFileTreeEntries)
   const items = entries.map(([name, value]) => {
     if (value === null) {
       const folderPath = parentPath ? `${parentPath}/${name}` : name
@@ -836,6 +850,10 @@ function renderCopyPathHtml(rootDir: string, projectId: string, projects: Projec
 
 export function renderCopyPathHtmlForTest(rootDir: string, projectId: string, projects: ProjectInfo[]): string {
   return renderCopyPathHtml(rootDir, projectId, projects)
+}
+
+export function renderFileTreeHtmlForTest(files: string[], emptyDirectories: string[] = []): string {
+  return renderFileTreeHtml(buildFileTree(files, emptyDirectories), "proj-id", "", "", new Map(), new Map())
 }
 
 async function renderSidebarHtml(
