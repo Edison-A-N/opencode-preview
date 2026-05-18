@@ -26,13 +26,50 @@ async function getStylesCss(): Promise<string> {
   return _stylesCss
 }
 
-let server: import("node:http").Server | null = null
-let wss: WebSocketServer | null = null
-let activePort = 17890
+// --- Singleton server state (shared across module instances) ---
+const SINGLETON_KEY = Symbol.for("opencode-preview-server-state")
+
+interface ServerState {
+  server: import("node:http").Server | null
+  wss: WebSocketServer | null
+  activePort: number
+  startPromise: Promise<number> | null
+  opencodeServerUrl: string | null
+  stop: (() => void) | null
+}
+
+function getServerState(): ServerState {
+  const g = globalThis as Record<symbol, ServerState | undefined>
+  let state = g[SINGLETON_KEY]
+  if (!state) {
+    state = {
+      server: null,
+      wss: null,
+      activePort: 17890,
+      startPromise: null,
+      opencodeServerUrl: null,
+      stop: null,
+    }
+    g[SINGLETON_KEY] = state
+  }
+  return state
+}
+
+function resetServerState(state: ServerState): void {
+  const websocketServer = state.wss
+  const httpServer = state.server
+  state.wss = null
+  state.server = null
+  state.activePort = 0
+  state.opencodeServerUrl = null
+  state.stop = null
+  websocketServer?.close()
+  if (httpServer?.listening) {
+    httpServer.close()
+  }
+}
 
 // --- Project resolution via opencode API ---
-
-let opencodeServerUrl: string | null = null
 
 interface ProjectInfo {
   id: string
@@ -52,9 +89,10 @@ function getAuthHeaders(): Record<string, string> {
 }
 
 async function fetchProjects(): Promise<ProjectInfo[]> {
-  if (!opencodeServerUrl) return []
+  const serverUrl = getServerState().opencodeServerUrl
+  if (!serverUrl) return []
   try {
-    const resp = await fetch(`${opencodeServerUrl}/project`, { headers: getAuthHeaders() })
+    const resp = await fetch(`${serverUrl}/project`, { headers: getAuthHeaders() })
     if (!resp.ok) return []
     return (await resp.json()) as ProjectInfo[]
   } catch {
@@ -2026,7 +2064,7 @@ function contentTypeFromPath(filePath: string): string {
 // --- HTTP helpers ---
 
 function parseRequestUrl(req: IncomingMessage): URL {
-  const host = req.headers.host ?? `127.0.0.1:${activePort}`
+  const host = req.headers.host ?? `127.0.0.1:${getServerState().activePort}`
   return new URL(req.url ?? "/", `http://${host}`)
 }
 
@@ -2664,108 +2702,127 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
  * @param serverUrl - OpenCode serve URL for project discovery (e.g. "http://localhost:10013")
  */
 export async function startServer(port = Number(process.env.PREVIEW_PORT ?? "17890"), serverUrl?: string): Promise<number> {
-  if (server) {
-    // Server already running — just update the opencode URL if provided
-    if (serverUrl) opencodeServerUrl = serverUrl
-    return activePort
+  const state = getServerState()
+
+  if (state.startPromise) {
+    if (serverUrl) state.opencodeServerUrl = serverUrl
+    return state.startPromise
   }
 
-  activePort = Number.isNaN(port) ? 17890 : port
-  if (serverUrl) opencodeServerUrl = serverUrl
+  if (state.server) {
+    if (serverUrl) state.opencodeServerUrl = serverUrl
+    return state.activePort
+  }
 
-  const httpServer = createServer((req, res) => {
-    void handleHttpRequest(req, res).catch((error) => {
-      console.error("Request handling failed:", error)
-      if (!res.headersSent) {
-        sendResponse(res, 500, "Internal Server Error")
-      } else {
-        res.end()
-      }
-    })
-  })
-  server = httpServer
+  const startPromise = (async () => {
+    const resolvedPort = Number.isNaN(port) ? 17890 : port
+    state.activePort = resolvedPort
+    if (serverUrl) state.opencodeServerUrl = serverUrl
 
-  const websocketServer = new WebSocketServer({ noServer: true })
-  wss = websocketServer
-
-  websocketServer.on("connection", (ws) => {
-    wsClients.add(ws)
-    ws.on("message", () => {})
-    ws.on("close", () => {
-      handleWebSocketClose(ws)
-    })
-  })
-
-  httpServer.on("upgrade", (req, socket, head) => {
-    void (async () => {
-      const url = parseRequestUrl(req)
-      if (url.pathname !== "/ws") {
-        socket.destroy()
-        return
-      }
-
-      const projectId = url.searchParams.get("project")
-      if (!projectId) {
-        socket.destroy()
-        return
-      }
-
-      let projectRootDir: string
-      try {
-        projectRootDir = await resolveProjectDir(projectId)
-      } catch {
-        socket.destroy()
-        return
-      }
-
-      let rootDir: string
-      try {
-        rootDir = await resolveRootDir(projectRootDir, url)
-      } catch {
-        rootDir = projectRootDir
-      }
-
-      await ensureWatchers(rootDir)
-      websocketServer.handleUpgrade(req, socket, head, (ws) => {
-        wsClientMeta.set(ws, { rootDir })
-        websocketServer.emit("connection", ws, req)
+    const httpServer = createServer((req, res) => {
+      void handleHttpRequest(req, res).catch((error) => {
+        console.error("Request handling failed:", error)
+        if (!res.headersSent) {
+          sendResponse(res, 500, "Internal Server Error")
+        } else {
+          res.end()
+        }
       })
-    })().catch(() => {
-      socket.destroy()
     })
-  })
+    state.server = httpServer
 
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error) => {
-      httpServer.off("listening", onListening)
-      reject(error)
-    }
-    const onListening = () => {
-      httpServer.off("error", onError)
-      resolve()
-    }
-    httpServer.once("error", onError)
-    httpServer.once("listening", onListening)
-    httpServer.listen(activePort, "0.0.0.0")
-  })
+    const websocketServer = new WebSocketServer({ noServer: true })
+    state.wss = websocketServer
 
-  return activePort
+    websocketServer.on("connection", (ws) => {
+      wsClients.add(ws)
+      ws.on("message", () => {})
+      ws.on("close", () => {
+        handleWebSocketClose(ws)
+      })
+    })
+
+    httpServer.on("upgrade", (req, socket, head) => {
+      void (async () => {
+        const url = parseRequestUrl(req)
+        if (url.pathname !== "/ws") {
+          socket.destroy()
+          return
+        }
+
+        const projectId = url.searchParams.get("project")
+        if (!projectId) {
+          socket.destroy()
+          return
+        }
+
+        let projectRootDir: string
+        try {
+          projectRootDir = await resolveProjectDir(projectId)
+        } catch {
+          socket.destroy()
+          return
+        }
+
+        let rootDir: string
+        try {
+          rootDir = await resolveRootDir(projectRootDir, url)
+        } catch {
+          rootDir = projectRootDir
+        }
+
+        await ensureWatchers(rootDir)
+        websocketServer.handleUpgrade(req, socket, head, (ws) => {
+          wsClientMeta.set(ws, { rootDir })
+          websocketServer.emit("connection", ws, req)
+        })
+      })().catch(() => {
+        socket.destroy()
+      })
+    })
+
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: Error) => {
+        httpServer.off("listening", onListening)
+        reject(error)
+      }
+      const onListening = () => {
+        httpServer.off("error", onError)
+        resolve()
+      }
+      httpServer.once("error", onError)
+      httpServer.once("listening", onListening)
+      httpServer.listen(resolvedPort, "0.0.0.0")
+    })
+
+    state.stop = () => {
+      closeAllWatchers()
+      for (const client of wsClients) {
+        client.close()
+      }
+      wsClients.clear()
+      projectCache.clear()
+      resetServerState(state)
+    }
+
+    return resolvedPort
+  })()
+
+  state.startPromise = startPromise
+  try {
+    const result = await startPromise
+    return result
+  } catch (error) {
+    resetServerState(state)
+    throw error
+  } finally {
+    state.startPromise = null
+  }
 }
 
 export function stopServer(): void {
-  if (!server) return
-  closeAllWatchers()
-  for (const client of wsClients) {
-    client.close()
-  }
-  wsClients.clear()
-  projectCache.clear()
-  opencodeServerUrl = null
-  activePort = 0
-  wss?.close()
-  wss = null
-  server.close()
-  server = null
+  const state = getServerState()
+  state.stop?.()
 }
 
 if (import.meta.main) {
