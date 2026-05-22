@@ -1,8 +1,31 @@
-import { tool, type Plugin, type PluginModule } from "@opencode-ai/plugin"
+import { type Plugin, type PluginModule, tool } from "@opencode-ai/plugin"
 
 import { isPreviewable, startServer } from "./server"
 
 const DEFAULT_PORT = Number(process.env.PREVIEW_PORT ?? "17890")
+
+export const PREVIEW_TOOL_DESCRIPTION =
+  "Open a browser preview and return a Preview URL for previewable files such as Markdown, DrawIO, HTML, PNG, SVG, and code files. Use this after creating or editing previewable files, and copy the returned Preview URL exactly into the final response."
+
+export const PREVIEW_SYSTEM_PROMPT = `When you create or modify previewable files such as Markdown (.md), DrawIO (.drawio), HTML, PNG, SVG, or source code files, you MUST call the preview tool for each relevant file before your final response.
+
+Do not manually construct preview URLs. Use only the exact Preview URL returned by the preview tool, and include that exact URL in your final response.`
+
+export function buildPreviewUrl(baseUrl: string, projectId: string, file: string, worktree?: string): string {
+  let url = `${baseUrl}/preview?project=${encodeURIComponent(projectId)}&file=${encodeURIComponent(file)}`
+  if (worktree) url += `&worktree=${encodeURIComponent(worktree)}`
+  return url
+}
+
+export function addPreviewSystemPrompt(output: { system: string[] }): void {
+  output.system.push(PREVIEW_SYSTEM_PROMPT)
+}
+
+export function applyPreviewToolDefinition(input: { toolID: string }, output: { description: string }): void {
+  if (input.toolID === "preview") {
+    output.description = PREVIEW_TOOL_DESCRIPTION
+  }
+}
 
 async function openInBrowser($: PluginContext["$"] | undefined, url: string): Promise<void> {
   if (!$) {
@@ -52,7 +75,7 @@ export const server: Plugin = async ({ project, client, $, serverUrl }) => {
   return {
     tool: {
       preview: tool({
-        description: "Open a browser preview and return a Preview URL for previewable files such as Markdown, DrawIO, HTML, PNG, SVG, and code files. Use this after creating or editing previewable files, and copy the returned Preview URL exactly into the final response.",
+        description: PREVIEW_TOOL_DESCRIPTION,
         args: {
           file: tool.schema.string().describe("Relative path to a previewable file (.md, .drawio, .png, code files)"),
           worktree: tool.schema.string().optional().describe("Git worktree name to preview from (resolves via .git/worktrees/)"),
@@ -60,13 +83,17 @@ export const server: Plugin = async ({ project, client, $, serverUrl }) => {
         async execute(args) {
           const { baseUrl } = await ready
           const file = args.file.trim()
-          const params = new URLSearchParams({ project: projectId, file })
-          if (args.worktree) params.set("worktree", args.worktree)
-          const url = `${baseUrl}/preview?${params.toString()}`
+          const url = buildPreviewUrl(baseUrl, projectId, file, args.worktree)
           await openInBrowser($, url)
           return `Preview URL: ${url}`
         },
       }),
+    },
+    "experimental.chat.system.transform": async (_input, output) => {
+      addPreviewSystemPrompt(output)
+    },
+    "tool.definition": async (input, output) => {
+      applyPreviewToolDefinition(input, output)
     },
     event: async ({ event }) => {
       if (event.type !== "file.edited") {

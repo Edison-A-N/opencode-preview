@@ -15,8 +15,9 @@ export default defineConfig([
     external: [
       "@opentui/core",
       "@opentui/solid",
+      "ws",
     ],
-    noExternal: ["ws", "marked", "@opencode-ai/plugin"],
+    noExternal: ["marked", "@opencode-ai/plugin"],
     async onSuccess() {
       const { cpSync, mkdirSync } = await import("node:fs")
       mkdirSync("dist/templates", { recursive: true })

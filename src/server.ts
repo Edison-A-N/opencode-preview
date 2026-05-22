@@ -623,6 +623,8 @@ async function gitDiff(rootDir: string, filePath: string): Promise<string> {
 const dirWatchers = new Map<string, { watchers: FSWatcher[]; refCount: number }>()
 const wsClients = new Set<WebSocket>()
 const wsClientMeta = new WeakMap<WebSocket, { rootDir: string }>()
+const WATCHER_START_WARN_MS = 1000
+const runtimeGlobals = globalThis as typeof globalThis & { Bun?: unknown }
 
 function closeWatchersForDir(dir: string): void {
   const entry = dirWatchers.get(dir)
@@ -665,6 +667,14 @@ function broadcastChange(changedDir: string): void {
   }
 }
 
+function hasLiveClientForDir(dir: string): boolean {
+  for (const client of wsClients) {
+    const metadata = wsClientMeta.get(client)
+    if (metadata?.rootDir === dir && client.readyState === WebSocket.OPEN) return true
+  }
+  return false
+}
+
 function watchPreviewDirectory(dir: string, directory: string, recursive: boolean): FSWatcher | null {
   try {
     const watcher = watch(directory, { recursive }, (_, filename) => {
@@ -683,6 +693,10 @@ function watchPreviewDirectory(dir: string, directory: string, recursive: boolea
   }
 }
 
+function shouldUseRecursiveWatcher(): boolean {
+  return runtimeGlobals.Bun === undefined && process.platform !== "linux"
+}
+
 async function ensureWatchers(dir: string): Promise<void> {
   const existing = dirWatchers.get(dir)
   if (existing) {
@@ -690,18 +704,40 @@ async function ensureWatchers(dir: string): Promise<void> {
     return
   }
 
-  const watcherList: FSWatcher[] = []
-  const recursiveWatcher = watchPreviewDirectory(dir, dir, true)
+  const entry = { watchers: [] as FSWatcher[], refCount: 1 }
+  dirWatchers.set(dir, entry)
+  const startedAt = Date.now()
+
+  const recursiveWatcher = shouldUseRecursiveWatcher() ? watchPreviewDirectory(dir, dir, true) : null
   if (recursiveWatcher) {
-    watcherList.push(recursiveWatcher)
+    entry.watchers.push(recursiveWatcher)
   } else {
     const directories = await listDirectories(dir)
+    if (dirWatchers.get(dir) !== entry) return
     for (const d of directories) {
       const watcher = watchPreviewDirectory(dir, d, false)
-      if (watcher) watcherList.push(watcher)
+      if (watcher) entry.watchers.push(watcher)
     }
   }
-  dirWatchers.set(dir, { watchers: watcherList, refCount: 1 })
+
+  const elapsed = Date.now() - startedAt
+  if (elapsed > WATCHER_START_WARN_MS) {
+    console.warn(`[opencode-preview] File watcher initialization for ${dir} took ${elapsed}ms (${entry.watchers.length} directories)`)
+  }
+}
+
+function startWatchers(rootDir: string): void {
+  setImmediate(() => {
+    if (!hasLiveClientForDir(rootDir)) return
+    void ensureWatchers(rootDir).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`[opencode-preview] File watcher initialization failed for ${rootDir}:`, message)
+      const entry = dirWatchers.get(rootDir)
+      if (entry?.watchers.length === 0) {
+        dirWatchers.delete(rootDir)
+      }
+    })
+  })
 }
 
 // --- HTML helpers ---
@@ -1034,6 +1070,10 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     return parts[parts.length - 1] || file;
   }
 
+  function getContentScrollElement() {
+    return content.querySelector(".preview-main") || content;
+  }
+
   function saveTabState() {
     try {
       var data = { tabs: tabs.map(function(t){ return { file: t.file, title: t.title, view: t.view || "file" }; }), active: activeTabIndex };
@@ -1090,14 +1130,14 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     if (prev >= 0 && prev < tabs.length && content) {
       tabs[prev].cachedHtml = content.innerHTML;
       tabs[prev].cachedClass = content.className;
-      tabs[prev].scrollTop = content.scrollTop || 0;
+      tabs[prev].scrollTop = getContentScrollElement().scrollTop || 0;
     }
     activeTabIndex = index;
     var tab = tabs[index];
     if (tab.cachedHtml !== undefined) {
       content.className = tab.cachedClass || "preview-content";
       content.innerHTML = tab.cachedHtml;
-      content.scrollTop = tab.scrollTop || 0;
+      getContentScrollElement().scrollTop = tab.scrollTop || 0;
       initMermaid();
       content.querySelectorAll("pre code").forEach(function(b) { if (window.hljs) window.hljs.highlightElement(b); });
       initToc();
@@ -1112,7 +1152,12 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     }
   }
 
-  function loadTabContent(tab, doSwitch) {
+  function loadTabContent(tab, doSwitch, options) {
+    options = options || {};
+    var preserveScroll = !!options.preserveScroll;
+    var quiet = !!options.quiet;
+    var isActiveTab = tabs[activeTabIndex] === tab;
+    var scrollTop = preserveScroll ? (isActiveTab ? getContentScrollElement().scrollTop || 0 : tab.scrollTop || 0) : 0;
     var params = new URLSearchParams();
     params.set("project", projectId);
     if (worktreeParams) {
@@ -1127,16 +1172,19 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       params.set("file", tab.file);
       apiUrl = (tab.view === "diff" ? "/api/render/diff?" : "/api/render?") + params.toString();
     }
-    if (doSwitch) content.style.opacity = "0.5";
+    if (doSwitch && !quiet) content.style.opacity = "0.5";
     fetch(apiUrl).then(function(resp) {
       if (!resp.ok) throw new Error(resp.status + "");
       return resp.json();
     }).then(function(data) {
+      var nextClass = data.contentClass || "preview-content";
+      var nextHtml = data.body;
+      var contentChanged = tab.cachedClass !== nextClass || tab.cachedHtml !== nextHtml;
       tab.title = data.title || "Preview";
-      tab.cachedClass = data.contentClass || "preview-content";
-      tab.cachedHtml = data.body;
-      tab.scrollTop = 0;
-      if (tabs[activeTabIndex] === tab) {
+      tab.cachedClass = nextClass;
+      tab.cachedHtml = nextHtml;
+      tab.scrollTop = scrollTop;
+      if (tabs[activeTabIndex] === tab && contentChanged) {
         content.className = tab.cachedClass;
         content.innerHTML = tab.cachedHtml;
         content.style.opacity = "";
@@ -1144,6 +1192,15 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
         content.querySelectorAll("pre code").forEach(function(b) { if (window.hljs) window.hljs.highlightElement(b); });
         initToc();
         initDrawio();
+        if (preserveScroll) {
+          var scrollElement = getContentScrollElement();
+          scrollElement.scrollTop = scrollTop;
+          requestAnimationFrame(function() { getContentScrollElement().scrollTop = scrollTop; });
+        }
+        document.title = tab.title;
+        updateSidebarActive(tab.file, tab.view || "file");
+      } else if (tabs[activeTabIndex] === tab) {
+        content.style.opacity = "";
         document.title = tab.title;
         updateSidebarActive(tab.file, tab.view || "file");
       }
@@ -1851,18 +1908,23 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
   // --- live reload WebSocket ---
   (function() {
     var wsParams = "project=" + encodeURIComponent(projectId) + (worktreeParams ? "&" + worktreeParams : "");
-    var socket, timer;
+    var socket, timer, reloadTimer;
+    function refreshOpenTabs() {
+      reloadTimer = null;
+      refreshChangesList(true);
+      tabs.forEach(function(tab) {
+        if (tab.file) {
+          var isActive = tabs[activeTabIndex] === tab;
+          loadTabContent(tab, isActive, { preserveScroll: true, quiet: true });
+        }
+      });
+    }
     function connect() {
       var protocol = window.location.protocol === "https:" ? "wss" : "ws";
       socket = new WebSocket(protocol + "://" + window.location.host + "/ws?" + wsParams);
       socket.onmessage = function() {
-    refreshChangesList(true);
-        tabs.forEach(function(tab) {
-          if (tab.file) {
-            var isActive = tabs[activeTabIndex] === tab;
-            loadTabContent(tab, isActive);
-          }
-        });
+        if (reloadTimer) clearTimeout(reloadTimer);
+        reloadTimer = setTimeout(refreshOpenTabs, 200);
       };
       socket.onclose = function() { clearTimeout(timer); timer = setTimeout(connect, 1000); };
     }
@@ -2807,10 +2869,10 @@ export async function startServer(port = Number(process.env.PREVIEW_PORT ?? "178
           rootDir = projectRootDir
         }
 
-        await ensureWatchers(rootDir)
         websocketServer.handleUpgrade(req, socket, head, (ws) => {
           wsClientMeta.set(ws, { rootDir })
           websocketServer.emit("connection", ws, req)
+          startWatchers(rootDir)
         })
       })().catch(() => {
         socket.destroy()
