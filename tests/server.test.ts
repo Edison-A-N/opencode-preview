@@ -43,8 +43,13 @@ describe("isPreviewable", () => {
     expect(isPreviewable("Makefile")).toBe(true)
   })
 
+  test("accepts png images", () => {
+    expect(isPreviewable("image.png")).toBe(true)
+    expect(isPreviewable("IMAGE.PNG")).toBe(true)
+  })
+
   test("rejects non-previewable files", () => {
-    expect(isPreviewable("image.png")).toBe(false)
+    expect(isPreviewable("image.jpg")).toBe(false)
     expect(isPreviewable("archive.zip")).toBe(false)
     expect(isPreviewable("binary.exe")).toBe(false)
   })

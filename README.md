@@ -36,6 +36,7 @@ That's it. Open OpenCode, and preview is ready.
 | **DrawIO** | Embedded [draw.io](https://www.drawio.com/) viewer with multi-page support, zoom, layers, and page navigation |
 | **HTML** | Sandboxed iframe preview with "Open in new tab" link |
 | **CSV** | Tabular rendering with rainbow-striped rows, row/column stats |
+| **PNG** | Minimal image preview with max-dimensions, centering, and original download link |
 | **Code** | Syntax highlighting for 40+ languages via [highlight.js](https://highlightjs.org/) — TypeScript, Python, Rust, Go, Java, Kotlin, C/C++, Ruby, PHP, Swift, Scala, Zig, Elixir, Erlang, Haskell, OCaml, Lua, R, SQL, GraphQL, Protobuf, HCL, Vue, Svelte, and more |
 
 ### Browser UI

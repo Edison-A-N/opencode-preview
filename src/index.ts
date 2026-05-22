@@ -52,9 +52,9 @@ export const server: Plugin = async ({ project, client, $, serverUrl }) => {
   return {
     tool: {
       preview: tool({
-        description: "Preview a file in the browser. Supports dir/worktree params to switch project context.",
+        description: "Open a browser preview and return a Preview URL for previewable files such as Markdown, DrawIO, HTML, PNG, SVG, and code files. Use this after creating or editing previewable files, and copy the returned Preview URL exactly into the final response.",
         args: {
-          file: tool.schema.string().describe("Relative path to a previewable file (.md, .drawio, code files)"),
+          file: tool.schema.string().describe("Relative path to a previewable file (.md, .drawio, .png, code files)"),
           worktree: tool.schema.string().optional().describe("Git worktree name to preview from (resolves via .git/worktrees/)"),
         },
         async execute(args) {

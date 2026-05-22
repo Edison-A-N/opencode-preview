@@ -193,7 +193,7 @@ const SPECIAL_FILENAMES: Record<string, string> = {
 
 export function isPreviewable(filePath: string): boolean {
   const ext = path.extname(filePath).toLowerCase()
-  if (ext === ".md" || ext === ".drawio" || ext === ".html" || ext === ".htm" || ext === ".csv") return true
+  if (ext === ".md" || ext === ".drawio" || ext === ".html" || ext === ".htm" || ext === ".csv" || ext === ".png") return true
   if (ext in CODE_EXTENSIONS) return true
   const basename = path.basename(filePath)
   return basename in SPECIAL_FILENAMES
@@ -2067,6 +2067,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
 
 function contentTypeFromPath(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase()
+  if (ext === ".png") return "image/png"
   if (ext === ".md") return "text/markdown; charset=utf-8"
   if (ext === ".drawio") return "application/xml; charset=utf-8"
   if (ext === ".csv") return "text/csv; charset=utf-8"
@@ -2084,7 +2085,7 @@ function parseRequestUrl(req: IncomingMessage): URL {
 function sendResponse(
   res: ServerResponse,
   status: number,
-  body: string,
+  body: string | Buffer,
   headers: Record<string, string> = {},
 ): void {
   res.writeHead(status, headers)
@@ -2416,6 +2417,25 @@ async function renderContent(projectId: string, rootDir: string, wtParams: strin
   }
 
   const extension = path.extname(absolutePath).toLowerCase()
+
+  if (extension === ".png") {
+    const apiPath = `/api/file?project=${encodeURIComponent(projectId)}&path=${encodeURIComponent(filePath)}`
+    const rawUrl = wtParams ? `${apiPath}&${wtParams}` : apiPath
+    const escapedUrl = escapeHtml(rawUrl)
+    const escapedName = escapeHtml(path.basename(absolutePath))
+    const body = `<div class="preview-image-container">
+  <img src="${escapedUrl}" class="preview-image" alt="Image preview" />
+  <div class="preview-image-actions">
+    <a href="${escapedUrl}" download="${escapedName}" target="_blank">Open Original</a>
+  </div>
+</div>`
+    return {
+      title: filePath,
+      body,
+      contentClass: "preview-content preview-content-image",
+    }
+  }
+
   const fileContent = await readFile(absolutePath, "utf-8")
 
   if (extension === ".md") {
@@ -2640,7 +2660,10 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
         return
       }
 
-      const raw = await readFile(absolutePath, "utf-8")
+      const ext = path.extname(absolutePath).toLowerCase()
+      const raw = ext === ".png"
+        ? await readFile(absolutePath)
+        : await readFile(absolutePath, "utf-8")
       sendResponse(res, 200, raw, { "content-type": contentTypeFromPath(absolutePath) })
       return
     } catch {
