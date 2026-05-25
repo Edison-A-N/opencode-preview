@@ -3,6 +3,11 @@ import { spawn } from "node:child_process"
 import { isPreviewable as serverIsPreviewable } from "./server"
 
 const DEFAULT_PORT = Number(process.env.PREVIEW_PORT ?? "17890")
+const DEFAULT_HOST = process.env.PREVIEW_HOST ?? "localhost"
+
+function resolveBaseUrl(host: string, port: number): string {
+  return host.includes(":") ? `http://${host}` : `http://${host}:${port}`
+}
 
 function openUrl(url: string) {
   const platform = process.platform
@@ -44,7 +49,7 @@ function browserUrl(baseUrl: string, projectId: string, worktree?: string): stri
 }
 
 export const tui: TuiPlugin = async (api) => {
-  const baseUrl = `http://localhost:${DEFAULT_PORT}`
+  const baseUrl = resolveBaseUrl(DEFAULT_HOST, DEFAULT_PORT)
   const directory = api.state.path.directory
   const worktree = getWorktreeName(api.state.path.worktree, directory)
 

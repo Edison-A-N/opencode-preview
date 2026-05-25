@@ -123,6 +123,7 @@ Then open `http://localhost:17890` in your browser.
 | Environment Variable | Default | Description |
 |---|---|---|
 | `PREVIEW_PORT` | `17890` | Server port |
+| `PREVIEW_HOST` | `localhost` | Hostname used in generated preview URLs. Set to your remote machine's hostname or IP when accessing the preview from a different machine (e.g. SSH remote) |
 | `PREVIEW_MAX_TABS` | `10` | Maximum number of open tabs in the browser UI |
 | `OPENCODE_SERVER_URL` | — | OpenCode server URL for project discovery (standalone mode only; auto-configured when running as plugin) |
 

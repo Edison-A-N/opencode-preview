@@ -3,6 +3,7 @@ import { type Plugin, type PluginModule, tool } from "@opencode-ai/plugin"
 import { isPreviewable, startServer } from "./server"
 
 const DEFAULT_PORT = Number(process.env.PREVIEW_PORT ?? "17890")
+const DEFAULT_HOST = process.env.PREVIEW_HOST ?? "localhost"
 
 export const PREVIEW_TOOL_DESCRIPTION =
   "Open a browser preview and return a Preview URL for previewable files such as Markdown, DrawIO, HTML, PNG, SVG, and code files. Use this after creating or editing previewable files, and copy the returned Preview URL exactly into the final response."
@@ -10,6 +11,10 @@ export const PREVIEW_TOOL_DESCRIPTION =
 export const PREVIEW_SYSTEM_PROMPT = `When you create or modify previewable files such as Markdown (.md), DrawIO (.drawio), HTML, PNG, SVG, or source code files, you MUST call the preview tool for each relevant file before your final response.
 
 Do not manually construct preview URLs. Use only the exact Preview URL returned by the preview tool, and include that exact URL in your final response.`
+
+function resolveBaseUrl(host: string, port: number): string {
+  return host.includes(":") ? `http://${host}` : `http://${host}:${port}`
+}
 
 export function buildPreviewUrl(baseUrl: string, projectId: string, file: string, worktree?: string): string {
   let url = `${baseUrl}/preview?project=${encodeURIComponent(projectId)}&file=${encodeURIComponent(file)}`
@@ -58,7 +63,7 @@ export const server: Plugin = async ({ project, client, $, serverUrl }) => {
   // when the preview tool is first invoked.
   const ready = (async () => {
     const port = await startServer(DEFAULT_PORT, serverUrl.toString().replace(/\/$/, ""))
-    const baseUrl = `http://localhost:${port}`
+    const baseUrl = resolveBaseUrl(DEFAULT_HOST, port)
 
     client.app.log({
       body: {
