@@ -39,6 +39,13 @@ interface ServerState {
   stop: (() => void) | null
 }
 
+interface ExternalPreviewEntry {
+  absolutePath: string
+  title: string
+}
+
+const externalPreviewFiles = new Map<string, ExternalPreviewEntry>()
+
 function getServerState(): ServerState {
   const g = globalThis as Record<symbol, ServerState | undefined>
   let state = g[SINGLETON_KEY]
@@ -213,6 +220,28 @@ export function ensureInsideRoot(rootDir: string, relativeFilePath: string): str
     throw new Error("Path is outside of preview root")
   }
   return resolvedPath
+}
+
+export function registerExternalPreviewFile(absolutePath: string, title = path.basename(absolutePath)): string {
+  if (!path.isAbsolute(absolutePath)) {
+    throw new Error("External preview path must be absolute")
+  }
+
+  const token = crypto.randomUUID()
+  externalPreviewFiles.set(token, { absolutePath, title })
+  return token
+}
+
+export function buildExternalPreviewUrl(baseUrl: string, token: string): string {
+  return `${baseUrl}/preview?external=${encodeURIComponent(token)}`
+}
+
+export function resolveExternalPreviewFile(token: string): ExternalPreviewEntry | null {
+  return externalPreviewFiles.get(token) ?? null
+}
+
+export function clearExternalPreviewFilesForTest(): void {
+  externalPreviewFiles.clear()
 }
 
 // --- File system helpers ---
@@ -396,18 +425,20 @@ async function runGit(rootDir: string, args: string[]): Promise<{ code: number; 
     const proc = spawn("git", ["-C", rootDir, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
     })
-    const stdoutChunks: Buffer[] = []
-    const stderrChunks: Buffer[] = []
-    proc.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk))
-    proc.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk))
+    proc.stdout.setEncoding("utf-8")
+    proc.stderr.setEncoding("utf-8")
+    const stdoutChunks: string[] = []
+    const stderrChunks: string[] = []
+    proc.stdout.on("data", (chunk: string) => stdoutChunks.push(chunk))
+    proc.stderr.on("data", (chunk: string) => stderrChunks.push(chunk))
     proc.on("error", (error) => {
       resolve({ code: 1, stdout: "", stderr: error.message })
     })
     proc.on("close", (code) => {
       resolve({
         code: code ?? 1,
-        stdout: Buffer.concat(stdoutChunks).toString("utf-8"),
-        stderr: Buffer.concat(stderrChunks).toString("utf-8"),
+        stdout: stdoutChunks.join(""),
+        stderr: stderrChunks.join(""),
       })
     })
   })
@@ -1000,7 +1031,7 @@ function renderChangesListHtml(
 
 // --- Shell page (SPA) ---
 
-async function renderShellPage(projectId: string, worktreeParams: string, rootDir: string, sidebarHtml: string, initialContent?: RenderResult): Promise<string> {
+async function renderShellPage(projectId: string, worktreeParams: string, rootDir: string, sidebarHtml: string, initialContent?: RenderResult, externalToken?: string): Promise<string> {
   const contentClass = initialContent ? initialContent.contentClass : "preview-content"
   const contentBody = initialContent ? initialContent.body : ""
   const title = initialContent?.title || "Preview"
@@ -1041,7 +1072,7 @@ async function renderShellPage(projectId: string, worktreeParams: string, rootDi
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
   <script>
-${shellScript(projectId, worktreeParams, rootDir)}
+${shellScript(projectId, worktreeParams, rootDir, externalToken)}
   </script>
 </body>
 </html>`
@@ -1049,11 +1080,12 @@ ${shellScript(projectId, worktreeParams, rootDir)}
 
 const MAX_TABS = Math.max(Number(process.env.PREVIEW_MAX_TABS ?? "10"), 1)
 
-function shellScript(projectId: string, worktreeParams: string, rootDir: string): string {
+function shellScript(projectId: string, worktreeParams: string, rootDir: string, externalToken?: string): string {
   return `(function(){
   var projectId = ${JSON.stringify(projectId)};
   var worktreeParams = ${JSON.stringify(worktreeParams)};
   var rootDir = ${JSON.stringify(rootDir)};
+  var externalToken = ${JSON.stringify(externalToken ?? "")};
   var MAX_TABS = ${MAX_TABS};
   var content = document.getElementById("preview-content");
   var sidebar = document.getElementById("preview-sidebar");
@@ -1072,6 +1104,20 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
 
   function getContentScrollElement() {
     return content.querySelector(".preview-main") || content;
+  }
+
+  function scrollToHash() {
+    var hash = window.location.hash;
+    if (!hash || hash.length < 2) return;
+    var id = hash.slice(1);
+    try {
+      id = decodeURIComponent(id);
+    } catch(e) {}
+    var target = document.getElementById(id);
+    if (!target) return;
+    requestAnimationFrame(function() {
+      target.scrollIntoView({ behavior: "instant", block: "start" });
+    });
   }
 
   function saveTabState() {
@@ -1142,6 +1188,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       content.querySelectorAll("pre code").forEach(function(b) { if (window.hljs) window.hljs.highlightElement(b); });
       initToc();
       initDrawio();
+      scrollToHash();
       document.title = tab.title || "Preview";
       updateSidebarActive(tab.file, tab.view || "file");
       renderTabBar();
@@ -1159,17 +1206,21 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
     var isActiveTab = tabs[activeTabIndex] === tab;
     var scrollTop = preserveScroll ? (isActiveTab ? getContentScrollElement().scrollTop || 0 : tab.scrollTop || 0) : 0;
     var params = new URLSearchParams();
-    params.set("project", projectId);
-    if (worktreeParams) {
-      var wt = new URLSearchParams(worktreeParams);
-      wt.forEach(function(v, k) { params.set(k, v); });
+    if (externalToken) {
+      params.set("external", externalToken);
+    } else {
+      params.set("project", projectId);
+      if (worktreeParams) {
+        var wt = new URLSearchParams(worktreeParams);
+        wt.forEach(function(v, k) { params.set(k, v); });
+      }
     }
     var apiUrl;
     if (tab.view === "commit") {
       params.set("commit", tab.file);
       apiUrl = "/api/render/commit?" + params.toString();
     } else {
-      params.set("file", tab.file);
+      if (!externalToken) params.set("file", tab.file);
       apiUrl = (tab.view === "diff" ? "/api/render/diff?" : "/api/render?") + params.toString();
     }
     if (doSwitch && !quiet) content.style.opacity = "0.5";
@@ -1197,6 +1248,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
           scrollElement.scrollTop = scrollTop;
           requestAnimationFrame(function() { getContentScrollElement().scrollTop = scrollTop; });
         }
+        if (!preserveScroll) scrollToHash();
         document.title = tab.title;
         updateSidebarActive(tab.file, tab.view || "file");
       } else if (tabs[activeTabIndex] === tab) {
@@ -1294,7 +1346,12 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
   function syncTabUrl() {
     var tab = tabs[activeTabIndex];
     var params = new URLSearchParams(window.location.search);
-    params.set("project", projectId);
+    if (externalToken) {
+      params.set("external", externalToken);
+      params.delete("project");
+    } else {
+      params.set("project", projectId);
+    }
     if (tab && tab.file) {
       var view = tab.view || "file";
       params.delete("file");
@@ -1312,7 +1369,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
       params.delete("file");
       params.delete("diff");
       params.delete("commit");
-      history.replaceState(null, "", "/browse?" + params.toString());
+      history.replaceState(null, "", externalToken ? "/preview?" + params.toString() : "/browse?" + params.toString());
     }
   }
 
@@ -1907,6 +1964,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
 
   // --- live reload WebSocket ---
   (function() {
+    if (externalToken) return;
     var wsParams = "project=" + encodeURIComponent(projectId) + (worktreeParams ? "&" + worktreeParams : "");
     var socket, timer, reloadTimer;
     function refreshOpenTabs() {
@@ -2108,6 +2166,7 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string)
         content.querySelectorAll("pre code").forEach(function(b) { if (window.hljs) window.hljs.highlightElement(b); });
         initToc();
         initDrawio();
+        scrollToHash();
       }
       renderTabBar();
       updateSidebarActive(initialPath, initialView);
@@ -2463,12 +2522,25 @@ interface RenderResult {
   contentClass: string
 }
 
+interface RenderContentInput {
+  displayPath: string
+  absolutePath: string
+  rawFileUrl: string
+}
+
 async function renderContent(projectId: string, rootDir: string, wtParams: string, filePath: string | null): Promise<RenderResult> {
   if (!filePath) {
     return { title: "Preview Browser", body: BROWSE_EMPTY_BODY, contentClass: "preview-content" }
   }
 
   const absolutePath = ensureInsideRoot(rootDir, filePath)
+  const apiPath = `/api/file?project=${encodeURIComponent(projectId)}&path=${encodeURIComponent(filePath)}`
+  const rawFileUrl = wtParams ? `${apiPath}&${wtParams}` : apiPath
+  return renderResolvedContent({ displayPath: filePath, absolutePath, rawFileUrl }, projectId, wtParams)
+}
+
+async function renderResolvedContent(input: RenderContentInput, projectId: string, wtParams: string): Promise<RenderResult> {
+  const { displayPath, absolutePath, rawFileUrl } = input
   const fileStat = await stat(absolutePath)
   if (!fileStat.isFile()) {
     return { title: "Preview Browser", body: BROWSE_EMPTY_BODY, contentClass: "preview-content" }
@@ -2481,9 +2553,7 @@ async function renderContent(projectId: string, rootDir: string, wtParams: strin
   const extension = path.extname(absolutePath).toLowerCase()
 
   if (extension === ".png") {
-    const apiPath = `/api/file?project=${encodeURIComponent(projectId)}&path=${encodeURIComponent(filePath)}`
-    const rawUrl = wtParams ? `${apiPath}&${wtParams}` : apiPath
-    const escapedUrl = escapeHtml(rawUrl)
+    const escapedUrl = escapeHtml(rawFileUrl)
     const escapedName = escapeHtml(path.basename(absolutePath))
     const body = `<div class="preview-image-container">
   <img src="${escapedUrl}" class="preview-image" alt="Image preview" />
@@ -2492,7 +2562,7 @@ async function renderContent(projectId: string, rootDir: string, wtParams: strin
   </div>
 </div>`
     return {
-      title: filePath,
+      title: displayPath,
       body,
       contentClass: "preview-content preview-content-image",
     }
@@ -2504,7 +2574,7 @@ async function renderContent(projectId: string, rootDir: string, wtParams: strin
     const body = await renderMarkdownBody(fileContent)
     const tocHtml = '<nav id="toc-nav" class="toc-nav"><div class="toc-heading">On This Page</div><ul></ul></nav>'
     return {
-      title: filePath,
+      title: displayPath,
       body: `<div class="preview-main">${body}</div>${tocHtml}`,
       contentClass: "preview-content preview-content-with-toc",
     }
@@ -2517,23 +2587,23 @@ async function renderContent(projectId: string, rootDir: string, wtParams: strin
     const body = `${metaHtml}<main class="drawio-container"><div id="drawio-viewer" class="mxgraph" data-mxgraph='${escapeHtml(JSON.stringify({
       highlight: "#4f46e5", nav: true, resize: true, toolbar: "pages zoom layers tags", border: 20, page: 0, lightbox: false, "toolbar-nohide": true, xml: fileContent,
     }))}'></div></main>`
-    return { title: filePath, body, contentClass: "preview-content" }
+    return { title: displayPath, body, contentClass: "preview-content" }
   }
 
   if (extension === ".html" || extension === ".htm") {
-    const body = renderHtmlBody(projectId, filePath, wtParams)
-    return { title: filePath, body, contentClass: "preview-content" }
+    const body = renderHtmlBody(projectId, displayPath, wtParams, rawFileUrl)
+    return { title: displayPath, body, contentClass: "preview-content" }
   }
 
   if (extension === ".csv") {
     const body = renderCsvBody(fileContent)
-    return { title: filePath, body, contentClass: "preview-content" }
+    return { title: displayPath, body, contentClass: "preview-content" }
   }
 
   const lang = getCodeLanguage(absolutePath)
   if (lang) {
     const body = renderCodeBody(fileContent, lang)
-    return { title: filePath, body, contentClass: "preview-content" }
+    return { title: displayPath, body, contentClass: "preview-content" }
   }
 
   return { title: "Preview Browser", body: BROWSE_EMPTY_BODY, contentClass: "preview-content" }
@@ -2587,6 +2657,64 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
   if (pathname === "/api/projects") {
     const projects = await fetchProjects()
     sendJson(res, projects)
+    return
+  }
+
+  const externalToken = url.searchParams.get("external")
+  if (externalToken) {
+    const entry = resolveExternalPreviewFile(externalToken)
+    if (!entry) {
+      sendResponse(res, 404, "External preview not found")
+      return
+    }
+
+    if (pathname === "/api/file") {
+      try {
+        const fileStat = await stat(entry.absolutePath)
+        if (!fileStat.isFile() || !isPreviewable(entry.absolutePath)) {
+          sendResponse(res, 400, "File is not previewable")
+          return
+        }
+
+        const ext = path.extname(entry.absolutePath).toLowerCase()
+        const raw = ext === ".png"
+          ? await readFile(entry.absolutePath)
+          : await readFile(entry.absolutePath, "utf-8")
+        sendResponse(res, 200, raw, { "content-type": contentTypeFromPath(entry.absolutePath) })
+      } catch {
+        sendResponse(res, 400, "Invalid file path")
+      }
+      return
+    }
+
+    if (pathname === "/api/render") {
+      try {
+        const result = await renderResolvedContent({
+          displayPath: entry.title,
+          absolutePath: entry.absolutePath,
+          rawFileUrl: `/api/file?external=${encodeURIComponent(externalToken)}`,
+        }, "", "")
+        sendJson(res, result)
+      } catch {
+        sendJson(res, { title: "Error", body: '<div class="browse-empty"><p>Failed to render file.</p></div>', contentClass: "preview-content" }, 500)
+      }
+      return
+    }
+
+    if (pathname === "/preview") {
+      const initialContent = await renderResolvedContent({
+        displayPath: entry.title,
+        absolutePath: entry.absolutePath,
+        rawFileUrl: `/api/file?external=${encodeURIComponent(externalToken)}`,
+      }, "", "")
+      const sidebarHtml = `<div class="copy-path-row"><button class="copy-path-btn" id="copy-path-btn" type="button" title="${escapeHtml(entry.absolutePath)}">${COPY_SVG}<span>Copy Path</span></button></div>`
+      sendResponse(res, 200, await renderShellPage("external", "", path.dirname(entry.absolutePath), sidebarHtml, initialContent, externalToken), {
+        "content-type": "text/html; charset=utf-8",
+      })
+      return
+    }
+
+    sendResponse(res, 404, "Not Found")
     return
   }
 
