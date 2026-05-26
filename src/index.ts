@@ -1,6 +1,10 @@
+import { stat } from "node:fs/promises"
+import { homedir } from "node:os"
+import path from "node:path"
+
 import { type Plugin, type PluginModule, tool } from "@opencode-ai/plugin"
 
-import { isPreviewable, startServer } from "./server"
+import { buildExternalPreviewUrl, isPreviewable, registerExternalPreviewFile, startServer } from "./server"
 
 const DEFAULT_PORT = Number(process.env.PREVIEW_PORT ?? "17890")
 const DEFAULT_HOST = process.env.PREVIEW_HOST ?? "localhost"
@@ -20,6 +24,25 @@ export function buildPreviewUrl(baseUrl: string, projectId: string, file: string
   let url = `${baseUrl}/preview?project=${encodeURIComponent(projectId)}&file=${encodeURIComponent(file)}`
   if (worktree) url += `&worktree=${encodeURIComponent(worktree)}`
   return url
+}
+
+function expandHomePath(filePath: string): string {
+  if (filePath === "~") return homedir()
+  if (filePath.startsWith(`~${path.sep}`)) return path.join(homedir(), filePath.slice(2))
+  return filePath
+}
+
+export function resolvePreviewInputPath(input: string, directory: string): string {
+  const expanded = expandHomePath(input)
+  return path.resolve(path.isAbsolute(expanded) ? expanded : path.join(directory, expanded))
+}
+
+export function toProjectRelativePath(absolutePath: string, worktree: string): string | null {
+  const resolvedWorktree = path.resolve(worktree)
+  const relative = path.relative(resolvedWorktree, absolutePath)
+  if (relative === "") return "."
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return null
+  return relative.split(path.sep).join("/")
 }
 
 export function addPreviewSystemPrompt(output: { system: string[] }): void {
@@ -82,13 +105,43 @@ export const server: Plugin = async ({ project, client, $, serverUrl }) => {
       preview: tool({
         description: PREVIEW_TOOL_DESCRIPTION,
         args: {
-          file: tool.schema.string().describe("Relative path to a previewable file (.md, .drawio, .png, code files)"),
+          file: tool.schema.string().describe("Path to a previewable file (.md, .drawio, .png, code files); relative, absolute, and ~ paths are supported"),
           worktree: tool.schema.string().optional().describe("Git worktree name to preview from (resolves via .git/worktrees/)"),
         },
-        async execute(args) {
+        async execute(args, context) {
           const { baseUrl } = await ready
           const file = args.file.trim()
-          const url = buildPreviewUrl(baseUrl, projectId, file, args.worktree)
+          if (args.worktree) {
+            const url = buildPreviewUrl(baseUrl, projectId, file, args.worktree)
+            await openInBrowser($, url)
+            return `Preview URL: ${url}`
+          }
+
+          const absolutePath = resolvePreviewInputPath(file, context.directory)
+          const projectRelativePath = toProjectRelativePath(absolutePath, context.worktree)
+          let url: string
+
+          if (projectRelativePath) {
+            url = buildPreviewUrl(baseUrl, projectId, projectRelativePath, args.worktree)
+          } else {
+            const fileStat = await stat(absolutePath)
+            if (!fileStat.isFile() || !isPreviewable(absolutePath)) {
+              throw new Error("File is not previewable")
+            }
+
+            await context.ask({
+              permission: "opencode-preview.external",
+              patterns: [absolutePath],
+              always: [path.dirname(absolutePath)],
+              metadata: {
+                title: `Preview external file ${absolutePath}`,
+                file: absolutePath,
+              },
+            })
+
+            const token = registerExternalPreviewFile(absolutePath, absolutePath)
+            url = buildExternalPreviewUrl(baseUrl, token)
+          }
           await openInBrowser($, url)
           return `Preview URL: ${url}`
         },
