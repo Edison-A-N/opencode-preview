@@ -5,6 +5,8 @@ import {
   applyPreviewToolDefinition,
   buildPreviewUrl,
   PREVIEW_TOOL_DESCRIPTION,
+  resolvePreviewInputPath,
+  toProjectRelativePath,
 } from "../src/index"
 
 describe("preview plugin guidance", () => {
@@ -51,3 +53,25 @@ describe("preview plugin guidance", () => {
     expect(url).toBe(
       "http://localhost:17890/preview?project=project&file=diagram.drawio&worktree=feature%2Flink-preview",
     )
+  })
+
+  test("preserves explicit worktree preview paths as provided", () => {
+    const url = buildPreviewUrl("http://localhost:17890", "project", "docs/readme.md", "feature/link-preview")
+
+    expect(url).toContain("file=docs%2Freadme.md")
+    expect(url).toContain("worktree=feature%2Flink-preview")
+  })
+
+  test("resolves preview input relative to tool context directory", () => {
+    expect(resolvePreviewInputPath("docs/readme.md", "/workspace/project")).toBe("/workspace/project/docs/readme.md")
+    expect(resolvePreviewInputPath("/tmp/outside.md", "/workspace/project")).toBe("/tmp/outside.md")
+  })
+
+  test("converts files inside the worktree to stable project-relative paths", () => {
+    expect(toProjectRelativePath("/workspace/project/docs/readme.md", "/workspace/project")).toBe("docs/readme.md")
+  })
+
+  test("returns null for files outside the worktree", () => {
+    expect(toProjectRelativePath("/tmp/outside.md", "/workspace/project")).toBeNull()
+  })
+})

@@ -6,12 +6,16 @@ import { renderCodeBody } from "../src/renderers/code"
 import { renderHtmlBody } from "../src/renderers/html"
 import { renderMarkdownBody } from "../src/renderers/markdown"
 import {
+  buildExternalPreviewUrl,
+  clearExternalPreviewFilesForTest,
   ensureInsideRoot,
   getCodeLanguage,
   getCurrentBranch,
   isPreviewable,
+  registerExternalPreviewFile,
   renderCopyPathHtmlForTest,
   renderFileTreeHtmlForTest,
+  resolveExternalPreviewFile,
 } from "../src/server"
 
 describe("isPreviewable", () => {
@@ -96,6 +100,27 @@ describe("ensureInsideRoot", () => {
   })
 })
 
+describe("external preview file registry", () => {
+  test("registers absolute file paths behind opaque tokens", () => {
+    clearExternalPreviewFilesForTest()
+
+    const token = registerExternalPreviewFile("/tmp/outside.md", "outside.md")
+
+    expect(token).not.toBe("/tmp/outside.md")
+    expect(resolveExternalPreviewFile(token)).toEqual({ absolutePath: "/tmp/outside.md", title: "outside.md" })
+  })
+
+  test("rejects relative external file paths", () => {
+    expect(() => registerExternalPreviewFile("docs/readme.md")).toThrow("External preview path must be absolute")
+  })
+
+  test("builds encoded external preview URLs", () => {
+    const url = buildExternalPreviewUrl("http://localhost:17890", "token/with space")
+
+    expect(url).toBe("http://localhost:17890/preview?external=token%2Fwith%20space")
+  })
+})
+
 describe("getCurrentBranch", () => {
   test("reads branch from a normal git directory", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "preview-branch-"))
@@ -161,6 +186,12 @@ describe("renderHtmlBody", () => {
   test("includes worktree params in iframe src", () => {
     const result = renderHtmlBody("proj-id", "page.html", "worktree=feature-branch")
     expect(result).toContain("/api/file?project=proj-id&path=page.html&worktree=feature-branch")
+  })
+
+  test("uses external raw file URL when provided", () => {
+    const result = renderHtmlBody("proj-id", "/tmp/outside.html", "", "/api/file?external=abc123")
+    expect(result).toContain("/api/file?external=abc123")
+    expect(result).not.toContain("/api/file?project=proj-id")
   })
 
   test("includes open in new tab link", () => {
